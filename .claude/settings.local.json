@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Edit",
+      "Bash(pip:*)",
+      "Bash(python:*)",
+      "Bash(cd:*)",
+      "Bash(git:*)",
+      "Read(C:\\Users\\Administrator\\Downloads\\n8n信息聚合器.json)",
+      "Bash(head:*)",
+      "mcp__acp__Bash",
+      "Skill(code-review)",
+      "Bash(if not exist review mkdir review)",
+      "Bash(mkdir:*)",
+      "Bash(cat:*)",
+      "Bash(test:*)",
+      "Bash(Select-String:*)"
+    ],
+    "deny": [],
+    "ask": []
+  },
+  "model": "anthropic/claude-sonnet-4.5",
+  "enabledPlugins": {
+    "document-skills@anthropic-agent-skills": true,
+    "example-skills@anthropic-agent-skills": true,
+    "browser@happy-claude-skills": true,
+    "glm-plan-usage@zai-coding-plugins": true
+  },
+  "alwaysThinkingEnabled": true
+}
