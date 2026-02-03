@@ -28,12 +28,6 @@ description: 对指定的 Git commit 进行全面的代码审查，包括获取 
 
 **带参数**：`请审查 commit <commit_id>，调用链深度 3 层，保存报告到 ./reviews 目录`
 
-可选（仅获取元信息）：
-
-```bash
-bash /mnt/skills/user/review/scripts/info.sh
-```
-
 **Arguments:** 无（参数由自然语言解析）
 
 ## 角色设定

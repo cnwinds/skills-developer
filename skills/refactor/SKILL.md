@@ -22,14 +22,6 @@ description: 对代码/项目进行深度重构、清理和优化，提高代码
 - `@refactor` — 重构当前文件或用户指定的代码
 - `@refactor <目录名>` — 重构指定目录下的所有代码文件
 
-可选（仅获取元信息）：
-
-```bash
-bash /mnt/skills/user/refactor/scripts/info.sh
-```
-
-**Arguments:** 无
-
 **Examples:**
 - 重构当前打开文件：`@refactor`
 - 重构整个目录：`@refactor src/`
