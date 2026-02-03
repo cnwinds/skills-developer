@@ -7,6 +7,35 @@ description: 对指定的 Git commit 进行全面的代码审查，包括获取 
 
 对 Git commit 进行全面的代码审查，生成详细的审查报告。
 
+## How It Works
+
+1. **输入验证**：校验 commit_id 格式与存在性，检测 merge commit 并询问用户。
+2. **获取 Commit 信息**：用 git 获取提交信息与 diff，先检查变更量再决定是否拉取完整 diff。
+3. **代码变更分析**：识别新增/修改/删除的函数、类、接口。
+4. **调用链分析**：按配置深度分析被修改函数的上下游调用关系。
+5. **接口变更评估**：检查接口变更、使用点是否同步、向后兼容性。
+6. **问题解决验证**：核对代码修改是否真正解决 commit 描述中的问题。
+7. **潜在问题检测**：资源泄露、空指针、死循环、性能、非最优解。
+8. **安全问题检测**：SQL 注入、XSS、硬编码敏感信息、权限与输入验证。
+9. **代码风格检查**：与项目现有风格对比。
+10. **生成审查报告**：按 `assets/report-template.md` 输出，可选保存到 `review/YYYYMMDD-<commit_id>.md`。
+
+## Usage
+
+本 skill 为指令型，由 Agent 阅读 SKILL.md 后执行。用户通过自然语言指定 commit_id 与可选参数。
+
+**基本用法**：`请审查 commit <commit_id>`
+
+**带参数**：`请审查 commit <commit_id>，调用链深度 3 层，保存报告到 ./reviews 目录`
+
+可选（仅获取元信息）：
+
+```bash
+bash /mnt/skills/user/review/scripts/info.sh
+```
+
+**Arguments:** 无（参数由自然语言解析）
+
 ## 角色设定
 
 你现在是一位拥有 10 年以上经验的资深代码审查专家，精通代码审查、架构设计和代码质量评估。你具备深入理解代码逻辑、识别潜在问题、评估代码变更影响的能力。
@@ -25,20 +54,6 @@ description: 对指定的 Git commit 进行全面的代码审查，包括获取 
 | 潜在问题检测 | 资源泄露、空指针、死循环、性能问题、非最优解 |
 | 安全问题检测 | SQL 注入、XSS、硬编码敏感信息、权限检查缺失 |
 | 代码风格检查 | 与项目现有代码风格对比 |
-
-## 使用方式
-
-### 基本用法
-
-```
-请审查 commit abc123
-```
-
-### 带配置参数
-
-```
-请审查 commit abc123，调用链深度 3 层，保存报告到 ./reviews 目录
-```
 
 ## 输入参数
 
@@ -360,6 +375,30 @@ Read: <similar_file_in_same_directory>
 
 ---
 
+## Output
+
+审查结果以 Markdown 报告形式输出，结构遵循 `assets/report-template.md`，包含：基本信息、审查结论（结果/评分/意见）、问题汇总（按严重程度）、详细分析（调用链、接口变更、问题验证、潜在问题、安全、风格等）。
+
+## Present Results to User
+
+1. **先给结论**：审查结果（通过/有条件通过/不通过）、综合评分与各维度评分表。
+2. **问题汇总**：按严重/中等/轻微列出问题，含文件与行号。
+3. **详细分析**：按模板章节展开，无问题的章节可省略。
+4. 若保存报告，告知路径：`review/YYYYMMDD-<commit_id>.md`。
+
+## Troubleshooting
+
+| 情况 | 处理方式 |
+|------|----------|
+| commit_id 无效或不存在 | 提示「commit ID 格式无效」或「无法找到 commit」，并说明如何获取正确 ID |
+| 当前目录不是 Git 仓库 | 提示「当前目录不是 Git 仓库」，请用户在仓库根目录执行 |
+| Merge commit | 检测到多个 parent 时询问用户：仅审查合并结果，或分别审查各父 commit |
+| 变更量过大（>1000 行） | 先询问是否继续完整分析；若跳过，仅分析文件列表与函数签名 |
+| 报告目录不存在 | 保存前创建 `review` 目录 |
+| 跨平台（Windows/Linux/Mac） | 使用 PowerShell 或 bash 对应命令获取 parent 数量与 diff 统计 |
+
+---
+
 ## 执行要求
 
 1. **必须使用 git 命令获取 commit 信息**，不要依赖假设
@@ -372,3 +411,12 @@ Read: <similar_file_in_same_directory>
 8. **如果未发现问题，也要明确说明"未发现问题"**
 9. **所有反馈必须具体**，指出具体的文件、行号和问题
 10. **报告保存路径格式**：`review/YYYYMMDD-<commit_id>.md`，其中 YYYYMMDD 是当前日期（如 20260126），如果 `review` 目录不存在则创建
+
+## 安装 (End-User Installation)
+
+**Claude Code**:
+```bash
+cp -r skills/review ~/.claude/skills/
+```
+
+**claude.ai**: 将本 skill 加入项目知识库或把 SKILL.md 内容粘贴到对话中。审查需执行 git 命令，请确保环境具备 git 与仓库访问权限。
