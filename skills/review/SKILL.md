@@ -1,16 +1,16 @@
 ---
 name: code-review
-description: 对指定的 Git commit 进行全面的代码审查，包括获取 commit 信息和 diff、分析代码变更、生成调用链文档、评估接口变更、验证问题解决、检测潜在问题（资源泄露、空指针、死循环、性能问题、安全漏洞等）、检查代码风格。使用场景：当用户提供 commit_id 需要审查代码变更时，或需要评估代码质量、安全性和可维护性时。
+description: 对 Git commit 或当前工作区未提交代码进行全面的代码审查，包括获取变更信息和 diff、分析代码变更、生成调用链文档、评估接口变更、验证问题解决、检测潜在问题（资源泄露、空指针、死循环、性能问题、安全漏洞等）、检查代码风格。使用场景：当用户提供 commit_id 需审查某次提交时，或未提供 commit_id 时审查当前工作区未提交的变更（已暂存 + 未暂存），或需要评估代码质量、安全性和可维护性时。
 ---
 
 # Code Review Skill
 
-对 Git commit 进行全面的代码审查，生成详细的审查报告。
+对 Git commit 或当前工作区未提交代码进行全面的代码审查，生成详细的审查报告。
 
 ## How It Works
 
-1. **输入验证**：校验 commit_id 格式与存在性，检测 merge commit 并询问用户。
-2. **获取 Commit 信息**：用 git 获取提交信息与 diff，先检查变更量再决定是否拉取完整 diff。
+1. **输入判断**：若用户未提供 commit_id，则审查**当前工作区未提交的变更**（已暂存 + 未暂存）；若提供了 commit_id，则校验格式与存在性，检测 merge commit 并询问用户。
+2. **获取变更信息**：无 commit_id 时用 `git diff` / `git diff --cached` 获取工作区 diff；有 commit_id 时用 git 获取该提交信息与 diff，先检查变更量再决定是否拉取完整 diff。
 3. **代码变更分析**：识别新增/修改/删除的函数、类、接口。
 4. **调用链分析**：按配置深度分析被修改函数的上下游调用关系。
 5. **接口变更评估**：检查接口变更、使用点是否同步、向后兼容性。
@@ -22,11 +22,13 @@ description: 对指定的 Git commit 进行全面的代码审查，包括获取 
 
 ## Usage
 
-本 skill 为指令型，由 Agent 阅读 SKILL.md 后执行。用户通过自然语言指定 commit_id 与可选参数。
+本 skill 为指令型，由 Agent 阅读 SKILL.md 后执行。用户通过自然语言指定 commit_id（可选）与可选参数。
 
-**基本用法**：`请审查 commit <commit_id>`
+**审查未提交代码**（不提供 commit_id）：`请审查当前未提交的代码` / `审查一下我改动的代码`
 
-**带参数**：`请审查 commit <commit_id>，调用链深度 3 层，保存报告到 ./reviews 目录`
+**审查指定提交**：`请审查 commit <commit_id>`
+
+**带参数**：`请审查当前改动，调用链深度 3 层` / `请审查 commit <commit_id>，保存报告到 ./reviews 目录`
 
 **Arguments:** 无（参数由自然语言解析）
 
@@ -40,7 +42,7 @@ description: 对指定的 Git commit 进行全面的代码审查，包括获取 
 
 | 能力 | 说明 |
 |------|------|
-| Commit 信息获取 | 使用 git 命令获取提交描述、diff、修改文件列表 |
+| 变更信息获取 | 有 commit_id 时获取提交描述与 diff；无 commit_id 时获取工作区未提交 diff（已暂存 + 未暂存） |
 | 代码变更分析 | 识别新增/修改/删除的函数、类、接口 |
 | 调用链分析 | 分析被修改函数的上下游调用关系（默认 2 层深度） |
 | 接口变更评估 | 检查接口变更、同步情况和向后兼容性 |
@@ -53,7 +55,7 @@ description: 对指定的 Git commit 进行全面的代码审查，包括获取 
 
 | 参数 | 必填 | 默认值 | 说明 |
 |------|------|--------|------|
-| commit_id | 是 | - | 需要审查的 Git commit ID |
+| commit_id | 否 | - | 需要审查的 Git commit ID；不提供时审查当前工作区未提交的代码 |
 | depth | 否 | 2 | 调用链分析深度（1-5 层） |
 | save_report | 否 | true | 是否保存报告文件（默认保存） |
 | verbose | 否 | false | 是否输出详细分析过程 |
@@ -64,9 +66,13 @@ description: 对指定的 Git commit 进行全面的代码审查，包括获取 
 
 ## 执行步骤
 
-### 0. 输入验证
+### 0. 输入判断与验证
 
-在开始审查前，必须验证输入参数：
+在开始审查前，先判断用户是否提供了 commit_id：
+
+**未提供 commit_id**：审查**当前工作区未提交的代码**（已暂存 + 未暂存），跳过下方 commit 验证，直接进入「1. 获取变更信息」中的「无 commit_id 分支」。
+
+**提供了 commit_id**：按以下步骤验证后，进入「1. 获取变更信息」中的「有 commit_id 分支」。
 
 **验证 commit_id 格式**:
 ```bash
@@ -82,7 +88,7 @@ git cat-file -t <commit_id>
 | 不存在 | fatal: Not a valid object name | 提示"无法找到 commit" |
 | 非 git 仓库 | fatal: not a git repository | 提示"当前目录不是 Git 仓库" |
 
-**检测 Merge Commit**:
+**检测 Merge Commit**（仅在有 commit_id 时）:
 ```bash
 # Windows PowerShell
 (git cat-file -p <commit_id> | Select-String "^parent").Count
@@ -95,11 +101,52 @@ git cat-file -p <commit_id> | grep "^parent" | wc -l
 
 ---
 
-### 1. 获取 Commit 信息
+### 1. 获取变更信息
 
 **使用工具**: Shell
 
-**执行顺序**（重要：按顺序执行，避免获取过大的diff）：
+---
+
+#### 分支 A：无 commit_id（审查当前工作区未提交代码）
+
+**步骤 1: 确认在 Git 仓库内**
+```bash
+git rev-parse --is-inside-work-tree
+```
+- 若返回非 `true`，提示「当前目录不是 Git 仓库」。
+
+**步骤 2: 获取未提交变更统计**
+```bash
+# 未暂存变更统计
+git diff --stat
+
+# 已暂存变更统计
+git diff --cached --stat
+```
+解析两段输出的最后一行（总行数统计），相加得到总变更量。
+
+**步骤 3: 检查变更量**
+- 解析上述 `--stat` 输出的最后一行，得到总增删行数。
+- 若 `新增行数 + 删除行数 > 1000`，询问用户是否继续完整分析；若跳过，仅分析文件列表与函数签名。
+
+**步骤 4: 获取完整 diff（需要时）**
+```bash
+# 未暂存的变更
+git diff
+
+# 已暂存的变更
+git diff --cached
+```
+审查时**两者都要纳入**：先理解 `git diff --cached`（即将提交的），再理解 `git diff`（工作区未暂存），合并为「当前未提交的全部变更」进行分析。
+
+**提取信息**（无 commit 元数据时）:
+- 说明来源：「当前工作区未提交的变更（已暂存 + 未暂存）」。
+- 修改的文件列表（从 `git diff --stat` 与 `git diff --cached --stat` 汇总）。
+- 完整代码变更：`git diff` 与 `git diff --cached` 的输出。
+
+---
+
+#### 分支 B：有 commit_id（审查指定提交）
 
 **步骤 1: 获取基本信息和变更统计**
 ```bash
@@ -141,10 +188,12 @@ git diff <commit_id>~1 <commit_id>  # 单独获取diff
 - 修改的文件列表（从 `--stat` 获取）
 - 完整的代码变更（diff，仅在需要时获取）
 
-**注意事项**:
-- ⚠️ **避免一次性获取大型diff**：对于包含大量文件或大文件的提交，先检查变更量再决定是否获取完整diff
+---
+
+**通用注意事项**:
+- ⚠️ **避免一次性获取大型diff**：对于包含大量文件或大文件的变更，先检查变更量再决定是否获取完整diff
 - ⚠️ **跨平台兼容**：Windows使用PowerShell命令，Linux/Mac使用bash命令
-- ⚠️ **性能优化**：对于大型提交（>1000行），可以只分析关键文件，跳过二进制文件或自动生成的文件
+- ⚠️ **性能优化**：对于大型变更（>1000行），可以只分析关键文件，跳过二进制文件或自动生成的文件
 
 ---
 
@@ -245,12 +294,12 @@ SemanticSearch: query="哪些地方使用了 <function_name>？"
 
 **使用工具**: Read
 
-1. 仔细阅读提交描述（commit message）
-2. 分析提交描述中要解决的问题
-3. 检查代码修改是否真正解决了描述中的问题：
-   - 修改是否针对问题根源
-   - 修改是否完整（是否只解决了部分问题）
-   - 是否有更好的解决方案
+- **有 commit_id 时**：  
+  1. 仔细阅读提交描述（commit message）  
+  2. 分析提交描述中要解决的问题  
+  3. 检查代码修改是否真正解决了描述中的问题：修改是否针对问题根源、是否完整、是否有更好方案  
+
+- **无 commit_id 时**：无提交描述可对照，本步骤可省略；若用户在前文说明了修改目的，可据此简要验证变更是否贴合目的。
 
 ---
 
@@ -363,7 +412,10 @@ Read: <similar_file_in_same_directory>
 - 如果章节没有问题，就整个章节不要，节省算力。
 
 **报告保存**:
-- 如果 save_report=true：保存到 `review/YYYYMMDD-<commit_id>.md`（其中 YYYYMMDD 是当前日期，格式：20260126）
+- 如果 save_report=true：
+  - 有 commit_id 时：保存到 `review/YYYYMMDD-<commit_id>.md`
+  - 无 commit_id 时：保存到 `review/YYYYMMDD-uncommitted.md`
+  - 其中 YYYYMMDD 是当前日期，格式：20260126
 - 否则：直接输出给用户
 - 注意：需要确保 `review` 目录存在，如果不存在则创建
 
@@ -378,12 +430,14 @@ Read: <similar_file_in_same_directory>
 1. **先给结论**：审查结果（通过/有条件通过/不通过）、综合评分与各维度评分表。
 2. **问题汇总**：按严重/中等/轻微列出问题，含文件与行号。
 3. **详细分析**：按模板章节展开，无问题的章节可省略。
-4. 若保存报告，告知路径：`review/YYYYMMDD-<commit_id>.md`。
+4. 若保存报告，告知路径：有 commit_id 时为 `review/YYYYMMDD-<commit_id>.md`，无 commit_id 时为 `review/YYYYMMDD-uncommitted.md`。
 
 ## Troubleshooting
 
 | 情况 | 处理方式 |
 |------|----------|
+| 未提供 commit_id | 审查当前工作区未提交的变更：使用 `git diff`（未暂存）与 `git diff --cached`（已暂存），报告保存为 `review/YYYYMMDD-uncommitted.md` |
+| 工作区无未提交变更 | 若 `git diff` 与 `git diff --cached` 均无输出，提示「当前没有未提交的变更，请先修改代码或提供要审查的 commit_id」 |
 | commit_id 无效或不存在 | 提示「commit ID 格式无效」或「无法找到 commit」，并说明如何获取正确 ID |
 | 当前目录不是 Git 仓库 | 提示「当前目录不是 Git 仓库」，请用户在仓库根目录执行 |
 | Merge commit | 检测到多个 parent 时询问用户：仅审查合并结果，或分别审查各父 commit |
@@ -395,8 +449,8 @@ Read: <similar_file_in_same_directory>
 
 ## 执行要求
 
-1. **必须使用 git 命令获取 commit 信息**，不要依赖假设
-2. **必须先验证 commit_id**，确保有效后再继续
+1. **必须使用 git 命令获取变更信息**：无 commit_id 时用 `git diff` 与 `git diff --cached` 获取未提交变更；有 commit_id 时用 git 获取该提交信息与 diff。不要依赖假设。
+2. **有 commit_id 时必须先验证**，确保有效后再继续；无 commit_id 时确认在 Git 仓库内且存在未提交变更。
 3. **必须分析完整的 diff**，包括所有修改的文件
 4. **调用链分析遵循深度限制**，默认 2 层
 5. **接口变更检查必须全面**，找出所有使用点
@@ -404,7 +458,7 @@ Read: <similar_file_in_same_directory>
 7. **代码风格检查必须对比项目现有代码**
 8. **如果未发现问题，也要明确说明"未发现问题"**
 9. **所有反馈必须具体**，指出具体的文件、行号和问题
-10. **报告保存路径格式**：`review/YYYYMMDD-<commit_id>.md`，其中 YYYYMMDD 是当前日期（如 20260126），如果 `review` 目录不存在则创建
+10. **报告保存路径**：有 commit_id 时为 `review/YYYYMMDD-<commit_id>.md`，无 commit_id 时为 `review/YYYYMMDD-uncommitted.md`；YYYYMMDD 为当前日期（如 20260126）；若 `review` 目录不存在则创建
 
 ## 安装 (End-User Installation)
 
