@@ -1,34 +1,37 @@
 ---
 name: code-review
-description: 对 Git commit 或当前工作区未提交代码进行全面的代码审查，包括获取变更信息和 diff、分析代码变更、生成调用链文档、评估接口变更、验证问题解决、检测潜在问题（资源泄露、空指针、死循环、性能问题、安全漏洞等）、检查代码风格。使用场景：当用户提供 commit_id 需审查某次提交时，或未提供 commit_id 时审查当前工作区未提交的变更（已暂存 + 未暂存），或需要评估代码质量、安全性和可维护性时。
+description: 对 Git/SVN 提交（commit/revision）或当前工作区未提交代码进行全面的代码审查，包括获取变更信息和 diff、分析代码变更、生成调用链文档、评估接口变更、验证问题解决、检测潜在问题（资源泄露、空指针、死循环、性能问题、安全漏洞等）、检查代码风格。使用场景：当用户提供 commit_id/revision 需审查某次提交时，或未提供时审查当前工作区未提交的变更，或需要评估代码质量、安全性和可维护性时。
 ---
 
 # Code Review Skill
 
-对 Git commit 或当前工作区未提交代码进行全面的代码审查，生成详细的审查报告。
+对 Git/SVN 提交（commit/revision）或当前工作区未提交代码进行全面的代码审查，生成详细的审查报告。
 
 ## How It Works
 
-1. **输入判断**：若用户未提供 commit_id，则审查**当前工作区未提交的变更**（已暂存 + 未暂存）；若提供了 commit_id，则校验格式与存在性，检测 merge commit 并询问用户。
-2. **获取变更信息**：无 commit_id 时用 `git diff` / `git diff --cached` 获取工作区 diff；有 commit_id 时用 git 获取该提交信息与 diff，先检查变更量再决定是否拉取完整 diff。
-3. **代码变更分析**：识别新增/修改/删除的函数、类、接口。
-4. **调用链分析**：按配置深度分析被修改函数的上下游调用关系。
-5. **接口变更评估**：检查接口变更、使用点是否同步、向后兼容性。
-6. **问题解决验证**：核对代码修改是否真正解决 commit 描述中的问题。
-7. **潜在问题检测**：资源泄露、空指针、死循环、性能、非最优解。
-8. **安全问题检测**：SQL 注入、XSS、硬编码敏感信息、权限与输入验证。
-9. **代码风格检查**：与项目现有风格对比。
-10. **生成审查报告**：按 `assets/report-template.md` 输出，可选保存到 `review/YYYYMMDD-<commit_id>.md`。
+1. **仓库类型识别**：识别当前工作区为 Git 还是 SVN；若均不匹配提示用户。
+2. **输入判断**：若用户未提供 commit_id/revision，则审查**当前工作区未提交的变更**；若提供了 commit_id/revision，则按仓库类型校验存在性，Git 需检测 merge commit 并询问用户。
+3. **获取变更信息**：无 commit_id/revision 时获取工作区 diff；有 commit_id/revision 时获取提交信息与 diff，先检查变更量再决定是否拉取完整 diff。Git 用 `git diff/git log`，SVN 用 `svn diff/svn log`。
+4. **代码变更分析**：识别新增/修改/删除的函数、类、接口。
+5. **调用链分析**：按配置深度分析被修改函数的上下游调用关系。
+6. **接口变更评估**：检查接口变更、使用点是否同步、向后兼容性。
+7. **问题解决验证**：核对代码修改是否真正解决提交描述中的问题。
+8. **潜在问题检测**：资源泄露、空指针、死循环、性能、非最优解。
+9. **安全问题检测**：SQL 注入、XSS、硬编码敏感信息、权限与输入验证。
+10. **代码风格检查**：与项目现有风格对比。
+11. **生成审查报告**：按 `assets/report-template.md` 输出，可选保存到 `review/YYYYMMDD-<commit_id_or_revision>.md`。
 
 ## Usage
 
-本 skill 为指令型，由 Agent 阅读 SKILL.md 后执行。用户通过自然语言指定 commit_id（可选）与可选参数。
+本 skill 为指令型，由 Agent 阅读 SKILL.md 后执行。用户通过自然语言指定 commit_id/revision（可选）与可选参数。
 
-**审查未提交代码**（不提供 commit_id）：`请审查当前未提交的代码` / `审查一下我改动的代码`
+**审查未提交代码**（不提供 commit_id/revision）：`请审查当前未提交的代码` / `审查一下我改动的代码`
 
-**审查指定提交**：`请审查 commit <commit_id>`
+**审查指定 Git 提交**：`请审查 commit <commit_id>`
 
-**带参数**：`请审查当前改动，调用链深度 3 层` / `请审查 commit <commit_id>，保存报告到 ./reviews 目录`
+**审查指定 SVN 修订**：`请审查 revision r1234` / `请审查 SVN 提交 1234`
+
+**带参数**：`请审查当前改动，调用链深度 3 层` / `请审查 commit <commit_id>，保存报告到 ./reviews 目录` / `请审查 revision r1234，保存报告到 ./reviews 目录`
 
 **Arguments:** 无（参数由自然语言解析）
 
@@ -42,7 +45,7 @@ description: 对 Git commit 或当前工作区未提交代码进行全面的代�
 
 | 能力 | 说明 |
 |------|------|
-| 变更信息获取 | 有 commit_id 时获取提交描述与 diff；无 commit_id 时获取工作区未提交 diff（已暂存 + 未暂存） |
+| 变更信息获取 | 有 commit_id/revision 时获取提交描述与 diff；无 commit_id/revision 时获取工作区未提交 diff（Git: 已暂存 + 未暂存；SVN: 工作副本变更） |
 | 代码变更分析 | 识别新增/修改/删除的函数、类、接口 |
 | 调用链分析 | 分析被修改函数的上下游调用关系（默认 2 层深度） |
 | 接口变更评估 | 检查接口变更、同步情况和向后兼容性 |
@@ -55,7 +58,7 @@ description: 对 Git commit 或当前工作区未提交代码进行全面的代�
 
 | 参数 | 必填 | 默认值 | 说明 |
 |------|------|--------|------|
-| commit_id | 否 | - | 需要审查的 Git commit ID；不提供时审查当前工作区未提交的代码 |
+| commit_id | 否 | - | 需要审查的 Git commit ID 或 SVN revision（如 r1234/1234）；不提供时审查当前工作区未提交的代码 |
 | depth | 否 | 2 | 调用链分析深度（1-5 层） |
 | save_report | 否 | true | 是否保存报告文件（默认保存） |
 | verbose | 否 | false | 是否输出详细分析过程 |
@@ -66,21 +69,38 @@ description: 对 Git commit 或当前工作区未提交代码进行全面的代�
 
 ## 执行步骤
 
+### 0. 仓库类型识别
+
+**使用工具**: Shell
+
+```bash
+# 优先判断 Git
+git rev-parse --is-inside-work-tree
+
+# 判断 SVN 工作副本
+svn info
+```
+
+- Git 返回 `true`：repo_type=git
+- Git 失败但 `svn info` 成功：repo_type=svn
+- 二者都失败：提示「当前目录不是 Git/SVN 仓库」
+- 若两者都成功（如目录嵌套），询问用户以哪个仓库为准
+
 ### 0. 输入判断与验证
 
-在开始审查前，先判断用户是否提供了 commit_id：
+在开始审查前，先判断用户是否提供了 commit_id/revision：
 
-**未提供 commit_id**：审查**当前工作区未提交的代码**（已暂存 + 未暂存），跳过下方 commit 验证，直接进入「1. 获取变更信息」中的「无 commit_id 分支」。
+**未提供 commit_id/revision**：审查**当前工作区未提交的代码**（Git: 已暂存 + 未暂存；SVN: 工作副本变更），跳过下方验证，直接进入「1. 获取变更信息」中的「无 commit_id/revision 分支」。
 
-**提供了 commit_id**：按以下步骤验证后，进入「1. 获取变更信息」中的「有 commit_id 分支」。
+**提供了 commit_id/revision**：按以下步骤验证后，进入「1. 获取变更信息」中的对应分支。
 
-**验证 commit_id 格式**:
+**Git：验证 commit_id 格式**:
 ```bash
 # commit_id 应为 7-40 位十六进制字符
 git cat-file -t <commit_id>
 ```
 
-**异常处理**:
+**Git：异常处理**:
 | 情况 | git 返回 | 处理方式 |
 |------|----------|----------|
 | 有效 commit | "commit" | 继续执行 |
@@ -88,7 +108,7 @@ git cat-file -t <commit_id>
 | 不存在 | fatal: Not a valid object name | 提示"无法找到 commit" |
 | 非 git 仓库 | fatal: not a git repository | 提示"当前目录不是 Git 仓库" |
 
-**检测 Merge Commit**（仅在有 commit_id 时）:
+**检测 Merge Commit**（仅在 Git 且有 commit_id 时）:
 ```bash
 # Windows PowerShell
 (git cat-file -p <commit_id> | Select-String "^parent").Count
@@ -99,6 +119,22 @@ git cat-file -p <commit_id> | grep "^parent" | wc -l
 - 返回 > 1：这是 merge commit，询问用户处理方式
 - 返回 = 1：普通 commit，继续执行
 
+**SVN：验证 revision 格式**:
+```bash
+# revision 通常为数字或 r1234
+svn log -r <revision> --limit 1
+```
+
+**SVN：异常处理**:
+| 情况 | svn 返回 | 处理方式 |
+|------|----------|----------|
+| 有效 revision | 正常输出日志 | 继续执行 |
+| 无效格式/不存在 | E160006: No such revision | 提示"无法找到 revision" |
+| 非 SVN 工作副本 | E155007: ... is not a working copy | 提示"当前目录不是 SVN 工作副本" |
+| 无访问权限 | E170013 / E230001 | 提示权限或网络问题 |
+
+**SVN 无 merge commit 概念**：跳过 merge commit 检测
+
 ---
 
 ### 1. 获取变更信息
@@ -107,7 +143,7 @@ git cat-file -p <commit_id> | grep "^parent" | wc -l
 
 ---
 
-#### 分支 A：无 commit_id（审查当前工作区未提交代码）
+#### 分支 A：Git 无 commit_id（审查当前工作区未提交代码）
 
 **步骤 1: 确认在 Git 仓库内**
 ```bash
@@ -146,7 +182,7 @@ git diff --cached
 
 ---
 
-#### 分支 B：有 commit_id（审查指定提交）
+#### 分支 B：Git 有 commit_id（审查指定提交）
 
 **步骤 1: 获取基本信息和变更统计**
 ```bash
@@ -190,10 +226,90 @@ git diff <commit_id>~1 <commit_id>  # 单独获取diff
 
 ---
 
+#### 分支 C：SVN 无 revision（审查当前工作区未提交代码）
+
+**步骤 1: 确认在 SVN 工作副本内**
+```bash
+svn info
+```
+- 若失败，提示「当前目录不是 SVN 工作副本」。
+
+**步骤 2: 获取未提交变更统计与文件列表**
+```bash
+# 状态（含新增/修改/删除/冲突/未跟踪）
+svn status
+
+# 变更文件列表
+svn diff --summarize
+```
+- 若 `svn status` 无输出，提示「当前没有未提交的变更」。
+
+**步骤 3: 检查变更量**
+```bash
+# 粗略统计新增/删除行数（忽略 diff 头）
+svn diff | rg -c "^\+($|[^+])"
+svn diff | rg -c "^\-($|[^-])"
+```
+- 若 `新增行数 + 删除行数 > 1000`，询问用户是否继续完整分析；若跳过，仅分析文件列表与函数签名。
+
+**步骤 4: 获取完整 diff（需要时）**
+```bash
+svn diff
+```
+
+**提取信息**:
+- 说明来源：「SVN 工作副本未提交的变更」。
+- 修改的文件列表（从 `svn diff --summarize` 与 `svn status` 汇总）。
+- 完整代码变更：`svn diff` 的输出。
+- 若存在未跟踪文件（`svn status` 显示 `?`），读取文件内容纳入审查，并在报告中标注为未纳入版本控制。
+
+---
+
+#### 分支 D：SVN 有 revision（审查指定修订）
+
+**步骤 1: 获取基本信息和变更统计**
+```bash
+# 获取 revision 基本信息（不包含diff）
+svn log -r <revision> --limit 1
+
+# 获取变更文件统计（仅统计信息，不包含diff内容）
+svn diff --summarize -c <revision>
+```
+
+**步骤 2: 检查变更量**
+```bash
+# 粗略统计新增/删除行数（忽略 diff 头）
+svn diff -c <revision> | rg -c "^\+($|[^+])"
+svn diff -c <revision> | rg -c "^\-($|[^-])"
+```
+
+**变更量判断**:
+- 解析上述统计结果，提取新增和删除的行数
+- 如果 `新增行数 + 删除行数 > 1000`，询问用户是否继续完整分析
+- 如果用户选择跳过，只分析文件列表和函数签名，不获取完整diff
+
+**步骤 3: 获取完整 diff（仅在需要时）**
+```bash
+# 只有在变更量合理或用户确认后才获取完整diff
+svn diff -c <revision>
+```
+
+**提取信息**:
+- Revision（修订号）
+- 作者信息
+- 提交时间
+- 提交消息
+- 修改的文件列表（从 `svn diff --summarize -c` 获取）
+- 完整的代码变更（diff，仅在需要时获取）
+
+---
+
 **通用注意事项**:
 - ⚠️ **避免一次性获取大型diff**：对于包含大量文件或大文件的变更，先检查变更量再决定是否获取完整diff
 - ⚠️ **跨平台兼容**：Windows使用PowerShell命令，Linux/Mac使用bash命令
 - ⚠️ **性能优化**：对于大型变更（>1000行），可以只分析关键文件，跳过二进制文件或自动生成的文件
+- ⚠️ **SVN 未跟踪文件**：`svn diff` 不包含未跟踪文件，需要从 `svn status` 中识别并读取
+- ⚠️ **SVN externals**：如存在外部引用，优先使用 `svn status --ignore-externals` / `svn diff --ignore-externals` 规避噪音
 
 ---
 
@@ -294,12 +410,12 @@ SemanticSearch: query="哪些地方使用了 <function_name>？"
 
 **使用工具**: Read
 
-- **有 commit_id 时**：  
+- **有 commit_id/revision 时**：  
   1. 仔细阅读提交描述（commit message）  
   2. 分析提交描述中要解决的问题  
   3. 检查代码修改是否真正解决了描述中的问题：修改是否针对问题根源、是否完整、是否有更好方案  
 
-- **无 commit_id 时**：无提交描述可对照，本步骤可省略；若用户在前文说明了修改目的，可据此简要验证变更是否贴合目的。
+- **无 commit_id/revision 时**：无提交描述可对照，本步骤可省略；若用户在前文说明了修改目的，可据此简要验证变更是否贴合目的。
 
 ---
 
@@ -413,8 +529,8 @@ Read: <similar_file_in_same_directory>
 
 **报告保存**:
 - 如果 save_report=true：
-  - 有 commit_id 时：保存到 `review/YYYYMMDD-<commit_id>.md`
-  - 无 commit_id 时：保存到 `review/YYYYMMDD-uncommitted.md`
+  - 有 commit_id/revision 时：保存到 `review/YYYYMMDD-<commit_id_or_revision>.md`
+  - 无 commit_id/revision 时：保存到 `review/YYYYMMDD-uncommitted.md`
   - 其中 YYYYMMDD 是当前日期，格式：20260126
 - 否则：直接输出给用户
 - 注意：需要确保 `review` 目录存在，如果不存在则创建
@@ -430,17 +546,17 @@ Read: <similar_file_in_same_directory>
 1. **先给结论**：审查结果（通过/有条件通过/不通过）、综合评分与各维度评分表。
 2. **问题汇总**：按严重/中等/轻微列出问题，含文件与行号。
 3. **详细分析**：按模板章节展开，无问题的章节可省略。
-4. 若保存报告，告知路径：有 commit_id 时为 `review/YYYYMMDD-<commit_id>.md`，无 commit_id 时为 `review/YYYYMMDD-uncommitted.md`。
+4. 若保存报告，告知路径：有 commit_id/revision 时为 `review/YYYYMMDD-<commit_id_or_revision>.md`，无 commit_id/revision 时为 `review/YYYYMMDD-uncommitted.md`。
 
 ## Troubleshooting
 
 | 情况 | 处理方式 |
 |------|----------|
-| 未提供 commit_id | 审查当前工作区未提交的变更：使用 `git diff`（未暂存）与 `git diff --cached`（已暂存），报告保存为 `review/YYYYMMDD-uncommitted.md` |
-| 工作区无未提交变更 | 若 `git diff` 与 `git diff --cached` 均无输出，提示「当前没有未提交的变更，请先修改代码或提供要审查的 commit_id」 |
-| commit_id 无效或不存在 | 提示「commit ID 格式无效」或「无法找到 commit」，并说明如何获取正确 ID |
-| 当前目录不是 Git 仓库 | 提示「当前目录不是 Git 仓库」，请用户在仓库根目录执行 |
-| Merge commit | 检测到多个 parent 时询问用户：仅审查合并结果，或分别审查各父 commit |
+| 未提供 commit_id/revision | 审查当前工作区未提交的变更：Git 使用 `git diff`（未暂存）与 `git diff --cached`（已暂存）；SVN 使用 `svn status` 与 `svn diff`，报告保存为 `review/YYYYMMDD-uncommitted.md` |
+| 工作区无未提交变更 | 若 Git 的 `git diff` 与 `git diff --cached` 均无输出，或 SVN 的 `svn status` 为空，提示「当前没有未提交的变更，请先修改代码或提供要审查的 commit_id/revision」 |
+| commit_id/revision 无效或不存在 | 提示「commit ID / revision 格式无效」或「无法找到提交/修订」，并说明如何获取正确 ID |
+| 当前目录不是 Git/SVN 仓库 | 提示「当前目录不是 Git/SVN 仓库」，请用户在仓库根目录执行 |
+| Merge commit | 仅 Git 适用：检测到多个 parent 时询问用户仅审查合并结果，或分别审查各父 commit |
 | 变更量过大（>1000 行） | 先询问是否继续完整分析；若跳过，仅分析文件列表与函数签名 |
 | 报告目录不存在 | 保存前创建 `review` 目录 |
 | 跨平台（Windows/Linux/Mac） | 使用 PowerShell 或 bash 对应命令获取 parent 数量与 diff 统计 |
@@ -449,8 +565,8 @@ Read: <similar_file_in_same_directory>
 
 ## 执行要求
 
-1. **必须使用 git 命令获取变更信息**：无 commit_id 时用 `git diff` 与 `git diff --cached` 获取未提交变更；有 commit_id 时用 git 获取该提交信息与 diff。不要依赖假设。
-2. **有 commit_id 时必须先验证**，确保有效后再继续；无 commit_id 时确认在 Git 仓库内且存在未提交变更。
+1. **必须使用 git 或 svn 命令获取变更信息**：无 commit_id/revision 时，Git 用 `git diff`/`git diff --cached`，SVN 用 `svn status`/`svn diff` 获取未提交变更；有 commit_id/revision 时用相应工具获取提交信息与 diff。不要依赖假设。
+2. **有 commit_id/revision 时必须先验证**，确保有效后再继续；无 commit_id/revision 时确认在对应仓库内且存在未提交变更。
 3. **必须分析完整的 diff**，包括所有修改的文件
 4. **调用链分析遵循深度限制**，默认 2 层
 5. **接口变更检查必须全面**，找出所有使用点
@@ -458,7 +574,7 @@ Read: <similar_file_in_same_directory>
 7. **代码风格检查必须对比项目现有代码**
 8. **如果未发现问题，也要明确说明"未发现问题"**
 9. **所有反馈必须具体**，指出具体的文件、行号和问题
-10. **报告保存路径**：有 commit_id 时为 `review/YYYYMMDD-<commit_id>.md`，无 commit_id 时为 `review/YYYYMMDD-uncommitted.md`；YYYYMMDD 为当前日期（如 20260126）；若 `review` 目录不存在则创建
+10. **报告保存路径**：有 commit_id/revision 时为 `review/YYYYMMDD-<commit_id_or_revision>.md`，无 commit_id/revision 时为 `review/YYYYMMDD-uncommitted.md`；YYYYMMDD 为当前日期（如 20260126）；若 `review` 目录不存在则创建
 
 ## 安装 (End-User Installation)
 
