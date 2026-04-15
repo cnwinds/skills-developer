@@ -1,0 +1,4 @@
+interface:
+  display_name: "TDX Parquet Sync"
+  short_description: "Incremental sync from TDX bars to Parquet."
+  default_prompt: "Sync TongDaXin vipdoc day and 5-minute data into Parquet with incremental updates and resumable state."
