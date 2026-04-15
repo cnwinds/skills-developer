@@ -1,0 +1,4 @@
+interface:
+  display_name: "TDX DuckDB Sync"
+  short_description: "Incremental sync from TDX bars to a single DuckDB file."
+  default_prompt: "Sync TongDaXin vipdoc day and 5-minute data into a single DuckDB database with incremental updates and resumable state."

@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import struct
 from dataclasses import dataclass
@@ -13,12 +14,11 @@ from typing import Callable
 from uuid import uuid4
 
 try:
+    import duckdb
     import pyarrow as pa
-    import pyarrow.dataset as ds
-    import pyarrow.parquet as pq
 except ImportError as exc:
     raise SystemExit(
-        "Missing dependency: pyarrow. Install with: python -m pip install pyarrow"
+        "Missing dependency: duckdb and/or pyarrow. Install with: python -m pip install duckdb pyarrow"
     ) from exc
 
 
@@ -62,6 +62,40 @@ MIN5_SCHEMA = pa.schema(
         ("volume", pa.int64()),
     ]
 )
+
+DUCKDB_FILENAME = "tdx.duckdb"
+
+BAR_TABLE_DDL = {
+    "daily": """
+        CREATE TABLE IF NOT EXISTS daily (
+            market VARCHAR,
+            symbol VARCHAR,
+            secid VARCHAR,
+            trade_date INTEGER,
+            open REAL,
+            high REAL,
+            low REAL,
+            close REAL,
+            amount DOUBLE,
+            volume BIGINT
+        )
+    """,
+    "min5": """
+        CREATE TABLE IF NOT EXISTS min5 (
+            market VARCHAR,
+            symbol VARCHAR,
+            secid VARCHAR,
+            trade_date INTEGER,
+            bar_time BIGINT,
+            open REAL,
+            high REAL,
+            low REAL,
+            close REAL,
+            amount DOUBLE,
+            volume BIGINT
+        )
+    """,
+}
 
 
 REFERENCE_SOURCE_FILES = [
@@ -228,30 +262,60 @@ class Buffer:
             self.data[column].append(row[idx])
 
 
+def database_path(output_root: Path) -> Path:
+    return output_root / DUCKDB_FILENAME
+
+
+def connect_database(path: Path) -> duckdb.DuckDBPyConnection:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    con = duckdb.connect(str(path))
+    thread_count = max(1, os.cpu_count() or 1)
+    con.execute(f"PRAGMA threads={thread_count}")
+    return con
+
+
+def ensure_bar_table(con: duckdb.DuckDBPyConnection, spec: "DatasetSpec") -> None:
+    con.execute(BAR_TABLE_DDL[spec.output_name])
+
+
+def ensure_indexes(con: duckdb.DuckDBPyConnection) -> None:
+    for stmt in [
+        "CREATE INDEX IF NOT EXISTS idx_daily_secid_trade_date ON daily (secid, trade_date)",
+        "CREATE INDEX IF NOT EXISTS idx_daily_trade_date ON daily (trade_date)",
+        "CREATE INDEX IF NOT EXISTS idx_min5_secid_bar_time ON min5 (secid, bar_time)",
+        "CREATE INDEX IF NOT EXISTS idx_min5_trade_date ON min5 (trade_date)",
+        "CREATE INDEX IF NOT EXISTS idx_security_master_secid ON security_master (secid)",
+        "CREATE INDEX IF NOT EXISTS idx_security_profile_secid ON security_profile (secid)",
+        "CREATE INDEX IF NOT EXISTS idx_security_industry_map_secid ON security_industry_map (secid)",
+        "CREATE INDEX IF NOT EXISTS idx_block_member_secid ON block_member (secid)",
+        "CREATE INDEX IF NOT EXISTS idx_block_member_block ON block_member (block_name, secid)",
+        "CREATE INDEX IF NOT EXISTS idx_index_snapshot_secid_date ON index_snapshot (secid, trade_date)",
+        "CREATE INDEX IF NOT EXISTS idx_security_business_secid ON security_business (secid)",
+        "CREATE INDEX IF NOT EXISTS idx_map_offsets_secid ON map_offsets (secid)",
+    ]:
+        try:
+            con.execute(stmt)
+        except duckdb.Error:
+            continue
+    con.execute("ANALYZE")
+
+
 def flush_buffer(
     buffer: Buffer,
     schema: pa.Schema,
-    output_dir: Path,
-    run_id: str,
-    flush_index: int,
+    con: duckdb.DuckDBPyConnection,
+    table_name: str,
 ) -> int:
     rows = len(buffer)
     if rows == 0:
         return 0
-    output_dir.mkdir(parents=True, exist_ok=True)
-    table = pa.Table.from_pydict(buffer.data, schema=schema)
-    ds.write_dataset(
-        data=table,
-        base_dir=str(output_dir),
-        format="parquet",
-        partitioning=ds.partitioning(
-            pa.schema([("market", pa.string()), ("trade_date", pa.int32())]),
-            flavor="hive",
-        ),
-        max_partitions=20000,
-        existing_data_behavior="overwrite_or_ignore",
-        basename_template=f"part-{run_id}-{flush_index}-{{i}}.parquet",
-    )
+    arrow_table = pa.Table.from_pydict(buffer.data, schema=schema)
+    relation_name = f"_buffer_{uuid4().hex[:10]}"
+    con.register(relation_name, arrow_table)
+    try:
+        con.execute(f"INSERT INTO {table_name} SELECT * FROM {relation_name}")
+    finally:
+        con.unregister(relation_name)
     buffer.clear()
     return rows
 
@@ -378,10 +442,9 @@ def list_source_files(
 
 def process_bar_dataset(
     spec: DatasetSpec,
+    con: duckdb.DuckDBPyConnection,
     tdx_root: Path,
-    output_root: Path,
     state_section: dict[str, dict],
-    run_id: str,
     markets: list[str],
     batch_size: int,
     full_rebuild: bool,
@@ -390,16 +453,21 @@ def process_bar_dataset(
     prune_state: bool,
 ) -> tuple[dict, dict]:
     files = list_source_files(tdx_root, markets, spec, max_files)
-    output_dir = output_root / spec.output_name
     buffer = Buffer(spec.columns)
-    next_state = dict(state_section)
+    ensure_bar_table(con, spec)
+    next_state = {} if full_rebuild else dict(state_section)
     seen_keys: set[str] = set()
     touched_dates: set[int] = set()
-    flush_index = 0
+    touched_secids: set[str] = set()
     written_rows = 0
     written_files = 0
     skipped_files = 0
+    replaced_files = 0
     parse_errors: list[str] = []
+
+    if full_rebuild:
+        market_list = ",".join("?" for _ in markets)
+        con.execute(f"DELETE FROM {spec.output_name} WHERE market IN ({market_list})", markets)
 
     for file_index, (market, file_path) in enumerate(files, start=1):
         stat = file_path.stat()
@@ -422,6 +490,7 @@ def process_bar_dataset(
             continue
 
         start_index = 0
+        replace_existing = full_rebuild
         if not full_rebuild and old:
             old_records = int(old.get("records", 0))
             if total_records < old_records:
@@ -433,6 +502,10 @@ def process_bar_dataset(
                     raise RuntimeError(message)
                 parse_errors.append(message)
                 start_index = 0
+                replace_existing = True
+            elif total_records == old_records:
+                start_index = 0
+                replace_existing = True
             else:
                 start_index = old_records
 
@@ -449,12 +522,13 @@ def process_bar_dataset(
         stem = file_path.stem.lower()
         symbol = stem[len(market) :] if stem.startswith(market) else stem
         secid = f"{market}{symbol}"
+        file_rows: list[tuple] = []
 
         try:
             if spec.name == "daily":
                 for trade_date, op, hi, lo, cl, amount, volume in spec.parser(raw, start_index):
                     touched_dates.add(trade_date)
-                    buffer.add(
+                    file_rows.append(
                         (
                             market,
                             symbol,
@@ -468,17 +542,12 @@ def process_bar_dataset(
                             volume,
                         )
                     )
-                    if len(buffer) >= batch_size:
-                        flush_index += 1
-                        written_rows += flush_buffer(
-                            buffer, spec.schema, output_dir, run_id, flush_index
-                        )
             else:
                 for trade_date, bar_time, op, hi, lo, cl, amount, volume in spec.parser(
                     raw, start_index
                 ):
                     touched_dates.add(trade_date)
-                    buffer.add(
+                    file_rows.append(
                         (
                             market,
                             symbol,
@@ -493,14 +562,18 @@ def process_bar_dataset(
                             volume,
                         )
                     )
-                    if len(buffer) >= batch_size:
-                        flush_index += 1
-                        written_rows += flush_buffer(
-                            buffer, spec.schema, output_dir, run_id, flush_index
-                        )
         except Exception as exc:  # noqa: BLE001
             parse_errors.append(f"{spec.name}: parse failed for {file_path}: {exc}")
             continue
+
+        if replace_existing:
+            con.execute(f"DELETE FROM {spec.output_name} WHERE secid = ?", [secid])
+            replaced_files += 1
+        touched_secids.add(secid)
+        for row in file_rows:
+            buffer.add(row)
+            if len(buffer) >= batch_size:
+                written_rows += flush_buffer(buffer, spec.schema, con, spec.output_name)
 
         next_state[key] = {
             "records": total_records,
@@ -517,8 +590,7 @@ def process_bar_dataset(
             )
 
     if len(buffer) > 0:
-        flush_index += 1
-        written_rows += flush_buffer(buffer, spec.schema, output_dir, run_id, flush_index)
+        written_rows += flush_buffer(buffer, spec.schema, con, spec.output_name)
 
     if prune_state:
         next_state = {k: v for k, v in next_state.items() if k in seen_keys}
@@ -528,7 +600,9 @@ def process_bar_dataset(
         "source_files": len(files),
         "written_files": written_files,
         "skipped_files": skipped_files,
+        "replaced_files": replaced_files,
         "rows_written": written_rows,
+        "touched_secids": sorted(touched_secids),
         "touched_trade_dates": sorted(touched_dates),
         "errors": parse_errors,
     }
@@ -899,16 +973,22 @@ def parse_code2name(path: Path) -> list[dict]:
     return rows
 
 
-def write_table(path: Path, rows: list[dict], empty_schema: pa.Schema | None = None) -> int:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if rows:
-        table = pa.Table.from_pylist(rows)
-    else:
-        table = pa.Table.from_arrays([], schema=empty_schema or pa.schema([]))
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    pq.write_table(table, tmp, compression="zstd")
-    tmp.replace(path)
-    return table.num_rows
+def replace_table(
+    con: duckdb.DuckDBPyConnection,
+    table_name: str,
+    rows: list[dict],
+) -> int:
+    if not rows:
+        con.execute(f"DROP TABLE IF EXISTS {table_name}")
+        return 0
+    arrow_table = pa.Table.from_pylist(rows)
+    relation_name = f"_table_{uuid4().hex[:10]}"
+    con.register(relation_name, arrow_table)
+    try:
+        con.execute(f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM {relation_name}")
+    finally:
+        con.unregister(relation_name)
+    return arrow_table.num_rows
 
 
 def file_signature(path: Path) -> dict[str, int]:
@@ -954,15 +1034,13 @@ def parse_source_manifest(tdx_root: Path, parsed_keys: set[str]) -> list[dict]:
 
 
 def process_reference_dataset(
+    con: duckdb.DuckDBPyConnection,
     tdx_root: Path,
-    output_root: Path,
     state_section: dict[str, dict],
     full_rebuild: bool,
 ) -> tuple[dict, dict]:
     sources, current = reference_sources(tdx_root)
     parse_errors: list[str] = []
-    output_dir = output_root / "reference"
-    output_dir.mkdir(parents=True, exist_ok=True)
 
     unchanged = (not full_rebuild) and state_section == current
     if unchanged:
@@ -1073,12 +1151,12 @@ def process_reference_dataset(
 
     if not parse_errors:
         for table_name, rows in tables.items():
-            count = write_table(output_dir / f"{table_name}.parquet", rows)
+            count = replace_table(con, table_name, rows)
             table_rows[table_name] = count
             rows_written += count
             written_files += 1
         manifest_rows = parse_source_manifest(tdx_root, parsed_keys)
-        manifest_count = write_table(output_dir / "source_manifest.parquet", manifest_rows)
+        manifest_count = replace_table(con, "source_manifest", manifest_rows)
         table_rows["source_manifest"] = manifest_count
         rows_written += manifest_count
         written_files += 1
@@ -1098,7 +1176,7 @@ def process_reference_dataset(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Incrementally sync TongDaXin bars and reference data to Parquet. "
+            "Incrementally sync TongDaXin bars and reference data into a single DuckDB database file. "
             "Bars: vipdoc/*/lday/*.day and vipdoc/*/fzline/*.lc5; "
             "Reference: T0002/hq_cache."
         )
@@ -1111,7 +1189,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-root",
         required=True,
-        help="Output directory for parquet datasets and state.",
+        help="Output directory for the DuckDB database, state, runner, and summary files.",
     )
     parser.add_argument(
         "--datasets",
@@ -1168,6 +1246,8 @@ def main() -> int:
     tdx_root = Path(args.tdx_root).expanduser().resolve()
     output_root = Path(args.output_root).expanduser().resolve()
     output_root.mkdir(parents=True, exist_ok=True)
+    db_path = database_path(output_root)
+    con = connect_database(db_path)
 
     valid_datasets = set(DATASETS.keys()) | {"reference"}
     requested_datasets = [x.strip().lower() for x in args.datasets.split(",") if x.strip()]
@@ -1202,43 +1282,49 @@ def main() -> int:
     total_files = 0
     total_errors = 0
 
-    for dataset_name in datasets:
-        if dataset_name in DATASETS:
-            spec = DATASETS[dataset_name]
-            section = state["sources"].get(dataset_name, {})
-            next_section, summary = process_bar_dataset(
-                spec=spec,
-                tdx_root=tdx_root,
-                output_root=output_root,
-                state_section=section,
-                run_id=run_id,
-                markets=markets,
-                batch_size=args.batch_size,
-                full_rebuild=args.full_rebuild,
-                fail_on_reset=args.fail_on_reset,
-                max_files=args.max_files,
-                prune_state=not args.keep_stale_state,
+    try:
+        for dataset_name in datasets:
+            if dataset_name in DATASETS:
+                spec = DATASETS[dataset_name]
+                section = state["sources"].get(dataset_name, {})
+                next_section, summary = process_bar_dataset(
+                    spec=spec,
+                    con=con,
+                    tdx_root=tdx_root,
+                    state_section=section,
+                    markets=markets,
+                    batch_size=args.batch_size,
+                    full_rebuild=args.full_rebuild,
+                    fail_on_reset=args.fail_on_reset,
+                    max_files=args.max_files,
+                    prune_state=not args.keep_stale_state,
+                )
+            else:
+                section = state["sources"].get("reference", {})
+                next_section, summary = process_reference_dataset(
+                    con=con,
+                    tdx_root=tdx_root,
+                    state_section=section,
+                    full_rebuild=args.full_rebuild,
+                )
+            state["sources"][dataset_name] = next_section
+            overall_summaries.append(summary)
+            total_rows += int(summary.get("rows_written", 0))
+            total_files += int(summary.get("written_files", 0))
+            total_errors += len(summary.get("errors", []))
+            print(
+                f"[{dataset_name}] source_files={summary.get('source_files', 0)} "
+                f"written_files={summary.get('written_files', 0)} "
+                f"rows_written={summary.get('rows_written', 0)} "
+                f"errors={len(summary.get('errors', []))}",
+                flush=True,
             )
-        else:
-            section = state["sources"].get("reference", {})
-            next_section, summary = process_reference_dataset(
-                tdx_root=tdx_root,
-                output_root=output_root,
-                state_section=section,
-                full_rebuild=args.full_rebuild,
-            )
-        state["sources"][dataset_name] = next_section
-        overall_summaries.append(summary)
-        total_rows += int(summary.get("rows_written", 0))
-        total_files += int(summary.get("written_files", 0))
-        total_errors += len(summary.get("errors", []))
-        print(
-            f"[{dataset_name}] source_files={summary.get('source_files', 0)} "
-            f"written_files={summary.get('written_files', 0)} "
-            f"rows_written={summary.get('rows_written', 0)} "
-            f"errors={len(summary.get('errors', []))}",
-            flush=True,
-        )
+
+        ensure_indexes(con)
+        con.close()
+    except Exception:
+        con.close()
+        raise
 
     state["updated_at"] = utc_now_iso()
     save_state(state_path, state)
@@ -1249,6 +1335,7 @@ def main() -> int:
         "finished_at": utc_now_iso(),
         "tdx_root": str(tdx_root),
         "output_root": str(output_root),
+        "database_path": str(db_path),
         "state_file": str(state_path),
         "datasets": overall_summaries,
         "totals": {

@@ -1,8 +1,8 @@
 param(
   [string]$TdxRoot = "C:\new_tdx64",
-  [string]$OutputRoot = "C:\tdx_parquet",
+  [string]$OutputRoot = "C:\tdx_duckdb",
   [string]$DailyTime = "16:00",
-  [string]$TaskName = "TDX_Incremental_Daily_1600",
+  [string]$TaskName = "TDX_DuckDB_Incremental_Daily_1600",
   [string]$PythonExe = "",
   [switch]$ForceBootstrap,
   [switch]$SkipBootstrap,
@@ -14,6 +14,7 @@ $ErrorActionPreference = "Stop"
 function Resolve-PythonExe {
   param([string]$Candidate)
   if ($Candidate -and (Test-Path $Candidate)) { return $Candidate }
+  if (Test-Path "C:\Users\Administrator\AppData\Local\Programs\Python\Python311\python.exe") { return "C:\Users\Administrator\AppData\Local\Programs\Python\Python311\python.exe" }
   if (Test-Path "C:\Python314\python.exe") { return "C:\Python314\python.exe" }
   $cmd = Get-Command python -ErrorAction SilentlyContinue
   if ($cmd) { return "python" }
@@ -26,15 +27,16 @@ function Get-OutputRootState {
   $items = @(Get-ChildItem -Force -LiteralPath $Root -ErrorAction SilentlyContinue)
   $stateFile = Join-Path $Root "_state\tdx_sync_state.json"
   $runnerPath = Join-Path $Root "run_tdx_incremental_daily.ps1"
-  $requiredDirs = @("daily", "min5", "reference") | ForEach-Object { Join-Path $Root $_ }
+  $dbPath = Join-Path $Root "tdx.duckdb"
 
   [pscustomobject]@{
     HasAnyContent = $items.Count -gt 0
     HasStateFile = Test-Path $stateFile
     HasRunner = Test-Path $runnerPath
-    HasAllDatasetDirs = (@($requiredDirs | Where-Object { Test-Path $_ })).Count -eq $requiredDirs.Count
+    HasDatabase = Test-Path $dbPath
     StateFile = $stateFile
     RunnerPath = $runnerPath
+    DatabasePath = $dbPath
   }
 }
 
@@ -43,7 +45,7 @@ if ($DailyTime -notmatch "^(?:[01]\d|2[0-3]):[0-5]\d$") {
 }
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$syncScript = Join-Path $scriptDir "sync_tdx_full_to_parquet.py"
+$syncScript = Join-Path $scriptDir "sync_tdx_to_duckdb.py"
 $requirements = Join-Path $scriptDir "requirements.txt"
 
 if (-not (Test-Path $syncScript)) { throw "Missing sync script: $syncScript" }
@@ -60,12 +62,17 @@ Write-Host "[0/4] Output root inspection..." -ForegroundColor Cyan
 Write-Host ("  OutputRoot: {0}" -f $OutputRoot)
 Write-Host ("  HasAnyContent: {0}" -f $outputState.HasAnyContent)
 Write-Host ("  HasStateFile: {0}" -f $outputState.HasStateFile)
-Write-Host ("  HasAllDatasetDirs: {0}" -f $outputState.HasAllDatasetDirs)
+Write-Host ("  HasDatabase: {0}" -f $outputState.HasDatabase)
 Write-Host ("  HasRunner: {0}" -f $outputState.HasRunner)
+Write-Host ("  DatabasePath: {0}" -f $outputState.DatabasePath)
 
 Write-Host "[1/4] Install Python dependencies..." -ForegroundColor Cyan
 & $py -m pip install -r $requirements
-if ($LASTEXITCODE -ne 0) { throw "pip install failed with code $LASTEXITCODE" }
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "  Default package source failed. Retry via PyPI..." -ForegroundColor Yellow
+  & $py -m pip install -r $requirements --index-url "https://pypi.org/simple" --default-timeout 1000
+  if ($LASTEXITCODE -ne 0) { throw "pip install failed with code $LASTEXITCODE" }
+}
 
 if ($SkipBootstrap) {
   $shouldBootstrap = $false
@@ -75,7 +82,7 @@ elseif ($ForceBootstrap) {
   $shouldBootstrap = $true
   Write-Host "[2/4] Force full bootstrap (-ForceBootstrap)." -ForegroundColor Yellow
 }
-elseif ((-not $outputState.HasAnyContent) -or (-not $outputState.HasStateFile) -or (-not $outputState.HasAllDatasetDirs)) {
+elseif ((-not $outputState.HasAnyContent) -or (-not $outputState.HasStateFile) -or (-not $outputState.HasDatabase)) {
   $shouldBootstrap = $true
   Write-Host "[2/4] Output root is empty or incomplete. Full bootstrap required." -ForegroundColor Yellow
 }

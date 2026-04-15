@@ -6,14 +6,14 @@ Maintain a stable local pipeline:
 
 1. Full bootstrap once.
 2. Daily incremental update at `16:00`.
-3. Parquet outputs always queryable.
+3. DuckDB outputs always queryable from a single database file.
 
 ## Required Confirmation
 
 Before any setup or sync command, confirm output directory with user.
 
 1. Ask user to confirm output root path.
-2. If missing, propose `C:\tdx_parquet` and wait for explicit confirmation.
+2. If missing, propose `C:\tdx_duckdb` and wait for explicit confirmation.
 3. Start commands only after confirmation.
 
 ## Required Inspection
@@ -21,8 +21,8 @@ Before any setup or sync command, confirm output directory with user.
 After output root is confirmed, inspect current state before deciding what to run.
 
 1. Check whether output root already contains files.
-2. Check whether `_state\tdx_sync_state.json` exists.
-3. Check whether `daily`, `min5`, and `reference` directories exist.
+2. Check whether `tdx.duckdb` exists.
+3. Check whether `_state\tdx_sync_state.json` exists.
 4. Treat empty or incomplete output roots as bootstrap cases.
 5. Treat complete output roots as completion/update cases.
 
@@ -36,12 +36,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "<skill_dir>\scripts\setup_t
 
 Expected result:
 
-- `C:\tdx_parquet\daily\...`
-- `C:\tdx_parquet\min5\...`
-- `C:\tdx_parquet\reference\...`
-- `C:\tdx_parquet\_state\tdx_sync_state.json`
-- `C:\tdx_parquet\run_tdx_incremental_daily.ps1`
-- Task `TDX_Incremental_Daily_1600` (daily at 16:00, `SYSTEM`)
+- `C:\tdx_duckdb\tdx.duckdb`
+- `C:\tdx_duckdb\_state\tdx_sync_state.json`
+- `C:\tdx_duckdb\run_tdx_incremental_daily.ps1`
+- Task `TDX_DuckDB_Incremental_Daily_1600` (daily at 16:00, `SYSTEM`)
 
 If output root already contains a complete dataset and state file, do not rebuild by default. Only regenerate runner/task or run incremental sync unless user explicitly asks for full rebuild.
 
@@ -49,19 +47,19 @@ If output root already contains a complete dataset and state file, do not rebuil
 
 Incremental update is done by scheduled task:
 
-- Task name: `TDX_Incremental_Daily_1600`
+- Task name: `TDX_DuckDB_Incremental_Daily_1600`
 - Command target: `run_tdx_incremental_daily.ps1`
-- Summary output: `C:\tdx_parquet\last_run_summary.json`
+- Summary output: `C:\tdx_duckdb\last_run_summary.json`
 
 Manual run equivalent:
 
 ```powershell
-python "<skill_dir>\scripts\sync_tdx_full_to_parquet.py" `
+python "<skill_dir>\scripts\sync_tdx_to_duckdb.py" `
   --tdx-root "C:\new_tdx64" `
-  --output-root "C:\tdx_parquet" `
+  --output-root "C:\tdx_duckdb" `
   --datasets daily,min5,reference `
   --markets sh,sz,bj `
-  --summary-json "C:\tdx_parquet\last_run_summary.json"
+  --summary-json "C:\tdx_duckdb\last_run_summary.json"
 ```
 
 ## Recovery Standard
@@ -80,6 +78,7 @@ After setup/update finishes, write key information into the user's current proje
 4. Include:
    - confirmed output root
    - TDX root
+   - database path
    - daily task time and task name
    - runner script path
    - state file path
@@ -89,7 +88,10 @@ After setup/update finishes, write key information into the user's current proje
 ## Verification Checklist
 
 1. Check task:
-   - `schtasks /Query /TN "TDX_Incremental_Daily_1600" /V /FO LIST`
-2. Check last summary JSON exists.
-3. Check state file timestamp updates after run.
-4. Spot check row counts in Parquet with DuckDB.
+   - `schtasks /Query /TN "TDX_DuckDB_Incremental_Daily_1600" /V /FO LIST`
+2. Check `tdx.duckdb` exists.
+3. Check last summary JSON exists.
+4. Check state file timestamp updates after run.
+5. Spot check row counts in DuckDB:
+   - `select count(*) from daily;`
+   - `select count(*) from min5;`
