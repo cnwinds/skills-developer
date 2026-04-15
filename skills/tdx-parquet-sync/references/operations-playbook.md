@@ -16,9 +16,19 @@ Before any setup or sync command, confirm output directory with user.
 2. If missing, propose `C:\tdx_parquet` and wait for explicit confirmation.
 3. Start commands only after confirmation.
 
+## Required Inspection
+
+After output root is confirmed, inspect current state before deciding what to run.
+
+1. Check whether output root already contains files.
+2. Check whether `_state\tdx_sync_state.json` exists.
+3. Check whether `daily`, `min5`, and `reference` directories exist.
+4. Treat empty or incomplete output roots as bootstrap cases.
+5. Treat complete output roots as completion/update cases.
+
 ## Initialization Standard
 
-Run once on a new machine or new output root:
+Run once on a new machine or on an empty/incomplete output root:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File "<skill_dir>\scripts\setup_tdx_collection_system.ps1"
@@ -32,6 +42,8 @@ Expected result:
 - `C:\tdx_parquet\_state\tdx_sync_state.json`
 - `C:\tdx_parquet\run_tdx_incremental_daily.ps1`
 - Task `TDX_Incremental_Daily_1600` (daily at 16:00, `SYSTEM`)
+
+If output root already contains a complete dataset and state file, do not rebuild by default. Only regenerate runner/task or run incremental sync unless user explicitly asks for full rebuild.
 
 ## Daily Update Standard
 
@@ -57,6 +69,22 @@ python "<skill_dir>\scripts\sync_tdx_full_to_parquet.py" `
 - Source/state mismatch or damaged state: run full bootstrap (`--full-rebuild`) once.
 - Need strict append-only checks: add `--fail-on-reset`.
 - Temporary missing files should not clear state: add `--keep-stale-state`.
+
+## Current Project Guide Update
+
+After setup/update finishes, write key information into the user's current project global guide file.
+
+1. Prefer project root `AGENTS.md`.
+2. If missing, create project root `AGENTS.md`.
+3. Add a `TDX Data Collection` section using `project-guide-template.md`.
+4. Include:
+   - confirmed output root
+   - TDX root
+   - daily task time and task name
+   - runner script path
+   - state file path
+   - summary JSON path
+   - progressive disclosure order for this skill
 
 ## Verification Checklist
 

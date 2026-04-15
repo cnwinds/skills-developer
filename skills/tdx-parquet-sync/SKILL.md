@@ -19,15 +19,31 @@ Before running any setup/bootstrap/sync command, confirm output directory with u
 2. If user did not provide a path, propose `C:\tdx_parquet` and wait for explicit confirmation.
 3. Do not execute commands that write files until output directory is confirmed.
 
+## Mandatory Inspection Rule
+
+After output directory is confirmed and before execution, inspect target directory state.
+
+1. Check whether output root already has content.
+2. Check whether `_state\tdx_sync_state.json` exists.
+3. Check whether `daily`, `min5`, and `reference` directories exist.
+4. Decide whether to run full bootstrap or only complete missing runtime pieces.
+
+Interpretation:
+
+- Empty or incomplete output root: run full bootstrap and then create/update daily task.
+- Existing complete output root: do not rebuild by default; only complete missing runner/task pieces unless user explicitly requests rebuild.
+
 ## Standard Workflow
 
 When user asks to collect/sync TDX data (or equivalent), do this by default:
 
 1. Confirm output directory with user first.
-2. Run one-command setup script (`setup_tdx_collection_system.ps1`) with confirmed output root.
-3. Ensure full bootstrap is executed once.
-4. Ensure daily incremental task exists at `16:00`.
-5. Report output root and summary file paths.
+2. Inspect the confirmed output root and determine whether it is empty, partial, or already initialized.
+3. Run one-command setup script (`setup_tdx_collection_system.ps1`) with confirmed output root.
+4. Ensure full bootstrap is executed once when output root is empty or incomplete.
+5. Ensure daily incremental task exists at `16:00`.
+6. Update the user's current project global guide file with key runtime information.
+7. Report output root, task name, summary path, and guide file path.
 
 Default parameters:
 
@@ -47,9 +63,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "<skill_dir>\scripts\setup_t
 This command does:
 
 1. Install dependencies from `scripts/requirements.txt`.
-2. Run full bootstrap (`--full-rebuild`) for `daily,min5,reference`.
-3. Generate incremental runner script at `<output-root>\run_tdx_incremental_daily.ps1`.
-4. Create/update daily scheduled task (`SYSTEM` account).
+2. Inspect output root and decide whether a full bootstrap is needed.
+3. Run full bootstrap (`--full-rebuild`) only when output root is empty/incomplete, or when forced.
+4. Generate incremental runner script at `<output-root>\run_tdx_incremental_daily.ps1`.
+5. Create/update daily scheduled task (`SYSTEM` account).
 
 ## Custom Setup Examples
 
@@ -74,6 +91,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "<skill_dir>\scripts\setup_t
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File "<skill_dir>\scripts\setup_tdx_collection_system.ps1" `
+  -ForceBootstrap `
   -SkipSchedule
 ```
 
@@ -108,6 +126,23 @@ python "<skill_dir>\scripts\sync_tdx_full_to_parquet.py" `
 - Reference (`reference`): compare source file signatures `(size, mtime_ns)`, rebuild only when changed.
 - Default daily operation: scheduled incremental sync at `16:00`.
 
+## Current Project Guide File
+
+After setup/sync is complete, update the current project's global guide file.
+
+1. Prefer project-root `AGENTS.md`.
+2. If project-root `AGENTS.md` does not exist, create it.
+3. Add or update a `TDX Data Collection` section using [project-guide-template.md](references/project-guide-template.md).
+4. Write the confirmed runtime values:
+   - `TdxRoot`
+   - `OutputRoot`
+   - `DailyTime`
+   - `TaskName`
+   - `RunnerPath`
+   - `StateFile`
+   - `LastSummaryJson`
+5. Also include the progressive disclosure order for this skill so future agents know what to read first.
+
 ## Recovery
 
 - State corruption or major source reset: run full bootstrap once.
@@ -125,4 +160,5 @@ python "<skill_dir>\scripts\sync_tdx_full_to_parquet.py" `
 
 - Read [operations-playbook.md](references/operations-playbook.md) for initialization/update SOP.
 - Read [parquet-schema.md](references/parquet-schema.md) for layout and query examples.
+- Read [project-guide-template.md](references/project-guide-template.md) when updating the user's current project guide file.
 - Read [table-dictionary.md](references/table-dictionary.md) for table columns and meanings.
