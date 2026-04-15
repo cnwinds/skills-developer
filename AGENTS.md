@@ -108,3 +108,34 @@ cp -r skills/{skill-name} ~/.claude/skills/
 Add the skill to project knowledge or paste SKILL.md contents into the conversation.
 
 If the skill requires network access, instruct users to add required domains at `claude.ai/settings/capabilities`.
+
+## Installed Skill Guide: `tdx-parquet-sync`
+
+This repository includes `skills/tdx-parquet-sync` for TongDaXin data collection and sync.
+
+### Required Runtime Defaults
+
+- Default TDX root: `C:\new_tdx64`
+- Default output root: `C:\tdx_parquet`
+- Default daily incremental task time: `16:00`
+- Default task name: `TDX_Incremental_Daily_1600`
+
+### Mandatory User Confirmation
+
+Before any setup/bootstrap/sync command, agents must confirm output directory with user.
+
+1. Ask user to confirm output root.
+2. If user did not provide a path, propose `C:\tdx_parquet`.
+3. Execute write operations only after explicit confirmation.
+
+### Progressive Disclosure For This Skill
+
+When handling TDX collection requests, load files in this order:
+
+1. `skills/tdx-parquet-sync/SKILL.md`
+2. `skills/tdx-parquet-sync/references/operations-playbook.md` (SOP/init/update/recovery)
+3. `skills/tdx-parquet-sync/references/parquet-schema.md` (dataset layout and query examples)
+4. `skills/tdx-parquet-sync/references/table-dictionary.md` (column semantics)
+5. `skills/tdx-parquet-sync/scripts/*` only as needed for execution or patching
+
+This keeps context small while preserving operational correctness.
