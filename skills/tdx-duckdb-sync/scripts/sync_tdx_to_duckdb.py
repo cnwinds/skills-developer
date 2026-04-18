@@ -104,6 +104,7 @@ REFERENCE_SOURCE_FILES = [
     "T0002/hq_cache/bjs.tnf",
     "T0002/hq_cache/base.dbf",
     "T0002/hq_cache/base.map",
+    "T0002/hq_cache/gbbq",
     "T0002/hq_cache/gbbq.map",
     "T0002/hq_cache/tdxhy.cfg",
     "T0002/hq_cache/tdxzs.cfg",
@@ -119,6 +120,9 @@ REFERENCE_SOURCE_FILES = [
     "T0002/hq_cache/ukblock.dat",
     "T0002/hq_cache/sgxblock.dat",
     "T0002/hq_cache/specgpext.txt",
+    "T0002/hq_cache/specetfdata.txt",
+    "T0002/hq_cache/speclofdata.txt",
+    "T0002/hq_cache/specjjdata.txt",
     "T0002/hq_cache/code2name.ini",
 ]
 
@@ -291,7 +295,12 @@ def ensure_indexes(con: duckdb.DuckDBPyConnection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_block_member_block ON block_member (block_name, secid)",
         "CREATE INDEX IF NOT EXISTS idx_index_snapshot_secid_date ON index_snapshot (secid, trade_date)",
         "CREATE INDEX IF NOT EXISTS idx_security_business_secid ON security_business (secid)",
+        "CREATE INDEX IF NOT EXISTS idx_etf_meta_secid ON etf_meta (secid)",
+        "CREATE INDEX IF NOT EXISTS idx_lof_meta_secid ON lof_meta (secid)",
+        "CREATE INDEX IF NOT EXISTS idx_fund_nav_snapshot_secid_date ON fund_nav_snapshot (secid, trade_date)",
         "CREATE INDEX IF NOT EXISTS idx_map_offsets_secid ON map_offsets (secid)",
+        "CREATE INDEX IF NOT EXISTS idx_corporate_action_secid ON corporate_action (secid, ex_date)",
+        "CREATE INDEX IF NOT EXISTS idx_corporate_action_ex_date ON corporate_action (ex_date)",
     ]:
         try:
             con.execute(stmt)
@@ -938,6 +947,142 @@ def parse_specgpext(path: Path) -> list[dict]:
     return rows
 
 
+def parse_specetfdata(path: Path) -> list[dict]:
+    """解析 ETF 扩展元数据（specetfdata.txt，固定 8 列，逗号分隔）。"""
+    rows: list[dict] = []
+    for line_no, line in enumerate(text_lines(path), start=1):
+        parts = line.split(",")
+        if len(parts) != 8:
+            continue
+        market_digit = parts[0].strip()
+        symbol = parts[1].strip()
+        if not symbol:
+            continue
+        market = market_from_digit(market_digit) or market_from_symbol(symbol)
+        list_date = parse_int(parts[6])
+        first_trade_date = parse_int(parts[7])
+        rows.append(
+            {
+                "market_digit": parse_int(market_digit),
+                "market": market,
+                "symbol": symbol,
+                "secid": make_secid(market, symbol if symbol.isdigit() and len(symbol) == 6 else None),
+                "tracking_code": parts[2].strip() or None,
+                "tracking_market_digit": parse_int(parts[3]),
+                "manager_code": parts[4].strip() or None,
+                "reserved": parts[5].strip() or None,
+                "list_date": list_date if list_date and validate_yyyymmdd(list_date) else None,
+                "first_trade_date": (
+                    first_trade_date
+                    if first_trade_date and validate_yyyymmdd(first_trade_date)
+                    else None
+                ),
+                "source_file": path.name,
+                "line_no": line_no,
+            }
+        )
+    return rows
+
+
+def parse_speclofdata(path: Path) -> list[dict]:
+    """解析 LOF 扩展元数据（speclofdata.txt，固定 6 列，逗号分隔）。"""
+    rows: list[dict] = []
+    for line_no, line in enumerate(text_lines(path), start=1):
+        parts = line.split(",")
+        if len(parts) != 6:
+            continue
+        market_digit = parts[0].strip()
+        symbol = parts[1].strip()
+        if not symbol:
+            continue
+        market = market_from_digit(market_digit) or market_from_symbol(symbol)
+        rows.append(
+            {
+                "market_digit": parse_int(market_digit),
+                "market": market,
+                "symbol": symbol,
+                "secid": make_secid(market, symbol if symbol.isdigit() and len(symbol) == 6 else None),
+                "tracking_code": parts[2].strip() or None,
+                "tracking_market_digit": parse_int(parts[3]),
+                "manager_code": parts[4].strip() or None,
+                "reserved": parts[5].strip() or None,
+                "source_file": path.name,
+                "line_no": line_no,
+            }
+        )
+    return rows
+
+
+def parse_specjjdata(path: Path) -> list[dict]:
+    """解析基金快照数据（specjjdata.txt，固定 6 列，逗号分隔）。"""
+    rows: list[dict] = []
+    for line_no, line in enumerate(text_lines(path), start=1):
+        parts = line.split(",")
+        if len(parts) != 6:
+            continue
+        symbol = parts[0].strip()
+        if not symbol:
+            continue
+        market_digit = parts[1].strip()
+        market = market_from_digit(market_digit) or market_from_symbol(symbol)
+        trade_date = parse_int(parts[3])
+        rows.append(
+            {
+                "symbol": symbol,
+                "market_digit": parse_int(market_digit),
+                "market": market,
+                "secid": make_secid(market, symbol if symbol.isdigit() and len(symbol) == 6 else None),
+                "tracking_code": parts[2].strip() or None,
+                "trade_date": trade_date if trade_date and validate_yyyymmdd(trade_date) else None,
+                "metric_01": parse_float(parts[4]),
+                "metric_02": parse_float(parts[5]),
+                "source_file": path.name,
+                "line_no": line_no,
+            }
+        )
+    return rows
+
+
+def parse_gbbq(path: Path) -> list[dict]:
+    """解析通达信股本变迁(除权除息)二进制文件 T0002/hq_cache/gbbq。"""
+    try:
+        from pytdx.reader.gbbq_reader import GbbqReader
+    except ImportError as exc:
+        raise RuntimeError(
+            "Missing dependency: pytdx. Install with: python -m pip install pytdx"
+        ) from exc
+
+    df = GbbqReader().get_df(str(path))
+    rows: list[dict] = []
+    if df is None or len(df) == 0:
+        return rows
+
+    for idx, record in enumerate(df.itertuples(index=False), start=1):
+        market_digit = int(record.market)
+        symbol = str(record.code).strip()
+        ex_date = int(record.datetime)
+        if not symbol or not validate_yyyymmdd(ex_date):
+            continue
+        market = market_from_digit(market_digit)
+        rows.append(
+            {
+                "market_digit": market_digit,
+                "market": market,
+                "symbol": symbol,
+                "secid": make_secid(market, symbol),
+                "ex_date": ex_date,
+                "category": int(record.category),
+                "field_01": float(record.hongli_panqianliutong),
+                "field_02": float(record.peigujia_qianzongguben),
+                "field_03": float(record.songgu_qianzongguben),
+                "field_04": float(record.peigu_houzongguben),
+                "source_file": path.name,
+                "line_no": idx,
+            }
+        )
+    return rows
+
+
 def parse_code2name(path: Path) -> list[dict]:
     rows: list[dict] = []
     for line_no, line in enumerate(text_lines(path), start=1):
@@ -1062,8 +1207,12 @@ def process_reference_dataset(
         "block_member": [],
         "index_snapshot": [],
         "security_business": [],
+        "etf_meta": [],
+        "lof_meta": [],
+        "fund_nav_snapshot": [],
         "map_offsets": [],
         "derivatives_meta": [],
+        "corporate_action": [],
     }
 
     parsed_keys: set[str] = set()
@@ -1138,10 +1287,30 @@ def process_reference_dataset(
             parsed_keys.add(key)
             tables["security_business"].extend(parse_specgpext(sources[key]))
 
+        key = "T0002/hq_cache/specetfdata.txt"
+        if key in sources:
+            parsed_keys.add(key)
+            tables["etf_meta"].extend(parse_specetfdata(sources[key]))
+
+        key = "T0002/hq_cache/speclofdata.txt"
+        if key in sources:
+            parsed_keys.add(key)
+            tables["lof_meta"].extend(parse_speclofdata(sources[key]))
+
+        key = "T0002/hq_cache/specjjdata.txt"
+        if key in sources:
+            parsed_keys.add(key)
+            tables["fund_nav_snapshot"].extend(parse_specjjdata(sources[key]))
+
         key = "T0002/hq_cache/code2name.ini"
         if key in sources:
             parsed_keys.add(key)
             tables["derivatives_meta"].extend(parse_code2name(sources[key]))
+
+        key = "T0002/hq_cache/gbbq"
+        if key in sources:
+            parsed_keys.add(key)
+            tables["corporate_action"].extend(parse_gbbq(sources[key]))
     except Exception as exc:  # noqa: BLE001
         parse_errors.append(f"reference parse failed: {exc}")
 

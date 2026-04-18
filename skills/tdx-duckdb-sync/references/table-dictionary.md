@@ -124,6 +124,40 @@
 - `reserved`: 预留
 - `source_file`, `line_no`
 
+## `reference/etf_meta`
+
+来源 `specetfdata.txt`（ETF 扩展元数据，固定 8 列，逗号分隔）。
+
+- `market_digit`, `market`, `symbol`, `secid`: 证券主键
+- `tracking_code`: 跟踪标的代码（指数/主题代码；部分为空）
+- `tracking_market_digit`: 跟踪标的市场数字代码（厂商编码）
+- `manager_code`: 基金管理人代码（如 `jjjl0000033`）
+- `reserved`: 预留字段
+- `list_date`: 上市日期（`yyyymmdd`，若可解析）
+- `first_trade_date`: 首个交易日期（`yyyymmdd`，若可解析）
+- `source_file`, `line_no`: 溯源字段
+
+## `reference/lof_meta`
+
+来源 `speclofdata.txt`（LOF 扩展元数据，固定 6 列，逗号分隔）。
+
+- `market_digit`, `market`, `symbol`, `secid`: 证券主键
+- `tracking_code`: 跟踪标的代码（指数/主题代码）
+- `tracking_market_digit`: 跟踪标的市场数字代码（厂商编码）
+- `manager_code`: 基金管理人代码
+- `reserved`: 预留字段
+- `source_file`, `line_no`: 溯源字段
+
+## `reference/fund_nav_snapshot`
+
+来源 `specjjdata.txt`（基金日快照，固定 6 列，逗号分隔）。
+
+- `market_digit`, `market`, `symbol`, `secid`: 证券主键
+- `tracking_code`: 跟踪标的代码（若有）
+- `trade_date`: 快照日期（`yyyymmdd`）
+- `metric_01`, `metric_02`: 快照数值字段（厂商私有语义，保留原顺序）
+- `source_file`, `line_no`: 溯源字段
+
 ## `reference/map_offsets`
 
 来源 `base.map` 与 `gbbq.map`。
@@ -153,6 +187,22 @@
 - `reserved_flag`: 预留标志
 - `delivery_rule`: 交割规则文本
 - `source_file`, `line_no`
+
+## `reference/corporate_action`
+
+来源 `T0002/hq_cache/gbbq`（通达信「股本变迁/除权除息」二进制文件，29 字节/条）。
+
+**新版 TDX 的 `gbbq` 文件前 24 字节加密**（类 Feistel + 内置 S-box），后 5 字节明文。
+采集层调用 `pytdx.reader.gbbq_reader.GbbqReader` 解密，随后按 pytdx 原生字段落入本表。
+
+- `market_digit`: 原始市场数字（0=深 / 1=沪）
+- `market`, `symbol`, `secid`: 证券主键
+- `ex_date`: 除权除息日（`yyyymmdd`）
+- `category`: 事件类型。实测常见取值：`1` 派息、`2` 配股、`3` 送转、`10` 股权分置、`11` 份额拆并
+- `field_01`..`field_04`: pytdx 原生字段依次落入 4 列，语义随 `category` 变化
+  - `category=1`：`field_01` 为每 10 份派现（元）
+  - `category=11`：`field_03` 为拆并比例因子（新份额/旧份额）
+- `source_file`, `line_no`: 溯源字段（`line_no` 为记录在文件中的顺序）
 
 ## `reference/source_manifest`
 

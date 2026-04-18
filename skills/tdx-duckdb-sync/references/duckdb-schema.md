@@ -18,8 +18,12 @@
 - `block_member`
 - `index_snapshot`
 - `security_business`
+- `etf_meta`
+- `lof_meta`
+- `fund_nav_snapshot`
 - `map_offsets`
 - `derivatives_meta`
+- `corporate_action`
 - `source_manifest`
 
 ## Daily columns

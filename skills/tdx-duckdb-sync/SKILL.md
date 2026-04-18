@@ -125,6 +125,7 @@ python "<skill_dir>\scripts\sync_tdx_to_duckdb.py" `
 
 - Bars (`daily/min5`): per-file append watermark in `_state\tdx_sync_state.json`, parse only new records unless a source file changes size/mtime without growth, in which case the corresponding symbol is rebuilt inside DuckDB.
 - Reference tables: compare source file signatures `(size, mtime_ns)`, rebuild only when changed.
+- Reference layer includes corporate actions (`gbbq`, via pytdx) and fund metadata snapshots (`specetfdata.txt`, `speclofdata.txt`, `specjjdata.txt`).
 - Default daily operation: scheduled incremental sync at `16:00`.
 
 ## Current Project Guide File
