@@ -128,6 +128,19 @@ python "<skill_dir>\scripts\sync_tdx_to_duckdb.py" `
 - Reference layer includes corporate actions (`gbbq`, via pytdx) and fund metadata snapshots (`specetfdata.txt`, `speclofdata.txt`, `specjjdata.txt`).
 - Default daily operation: scheduled incremental sync at `16:00`.
 
+## Data Caveats
+
+- `T0002/hq_cache/gbbq` is required for `corporate_action`. The parser depends on `pytdx.reader.gbbq_reader.GbbqReader`.
+- After any bootstrap or reference sync, verify `corporate_action` is present and non-empty. Do not assume a successful run summary alone is enough.
+- The raw TDX directory does **not** provide a historical daily ST status table. Files such as `security_master.name`, `infoharbor_ex.code`, and `infoharbor_block.dat` are current snapshots or board definitions and should not be used to filter historical ST stocks in a backtest.
+- The sync script now refreshes daily post-adjusted fields after `daily` or `reference` sync:
+  - `hfq_factor`: cumulative backward-adjustment factor (post-adjusted / raw)
+  - `hfq_open`, `hfq_high`, `hfq_low`, `hfq_close`: raw OHLC multiplied by `hfq_factor`
+- Current post-adjustment logic uses explicit `gbbq` price-affecting events with stable semantics:
+  - `category = 1`: cash dividend / bonus issue / rights issue
+  - `category = 11`: split / consolidation style ratio events
+- Other `gbbq` categories are retained in `corporate_action` for research, but are not applied to `hfq_factor` unless their semantics are later confirmed.
+
 ## Current Project Guide File
 
 After setup/sync is complete, update the current project's global guide file.
@@ -157,6 +170,12 @@ After setup/sync is complete, update the current project's global guide file.
 - Ensure `<output-root>\tdx.duckdb` exists.
 - Ensure summary JSON exists under output root.
 - Ensure state file exists: `<output-root>\_state\tdx_sync_state.json`.
+- Ensure `corporate_action` is populated:
+  - `select count(*) from corporate_action;`
+  - `select min(ex_date), max(ex_date) from corporate_action;`
+- Ensure post-adjusted fields are populated:
+  - `select count(*) from daily where hfq_factor is null or hfq_open is null or hfq_high is null or hfq_low is null or hfq_close is null;`
+  - `select secid, trade_date, open, high, low, close, hfq_factor, hfq_open, hfq_high, hfq_low, hfq_close from daily order by trade_date desc limit 20;`
 - For schedule mode, verify task:
   - `schtasks /Query /TN "TDX_DuckDB_Incremental_Daily_1600" /V /FO LIST`
 

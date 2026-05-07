@@ -107,12 +107,14 @@ if ($shouldBootstrap) {
 $runnerPath = Join-Path $OutputRoot "run_tdx_incremental_daily.ps1"
 $runnerContent = @"
 `$ErrorActionPreference = "Stop"
-& "$py" "$syncScript" `
-  --tdx-root "$TdxRoot" `
-  --output-root "$OutputRoot" `
-  --datasets "daily,min5,reference" `
-  --markets "sh,sz,bj" `
-  --summary-json "$OutputRoot\last_run_summary.json"
+`$args = @(
+  "--tdx-root", "$TdxRoot",
+  "--output-root", "$OutputRoot",
+  "--datasets", "daily,min5,reference",
+  "--markets", "sh,sz,bj",
+  "--summary-json", "$OutputRoot\last_run_summary.json"
+)
+& "$py" "$syncScript" @args
 exit `$LASTEXITCODE
 "@
 Set-Content -LiteralPath $runnerPath -Value $runnerContent -Encoding UTF8

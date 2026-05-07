@@ -67,6 +67,15 @@ python "<skill_dir>\scripts\sync_tdx_to_duckdb.py" `
 - Source/state mismatch or damaged state: run full bootstrap (`--full-rebuild`) once.
 - Need strict append-only checks: add `--fail-on-reset`.
 - Temporary missing files should not clear state: add `--keep-stale-state`.
+- If `corporate_action` is missing or empty after a run, first verify `pytdx` is installed in the Python environment used by the sync command, then rerun `--datasets reference` or the full selected sync.
+- If `hfq_factor` / `hfq_open` / `hfq_high` / `hfq_low` / `hfq_close` are missing after a run, rerun `--datasets daily,reference` or at least any sync path that triggers the daily post-adjustment refresh.
+
+## Data Caveats
+
+- `gbbq` can provide corporate actions / ex-rights-ex-dividend events and is suitable for rebuilding adjustment factors.
+- TDX raw files do not provide a historical daily ST flag table. Snapshot files such as `infoharbor_block.dat` or current security names must not be used as historical ST filters in a no-lookahead backtest.
+- The current post-adjustment implementation writes `hfq_factor` and `hfq_open/high/low/close` into `daily`, using confirmed `gbbq` categories `1` and `11`.
+- `hfq_ohlc` is appropriate for total-return style research. Raw OHLC should still be kept for limit-up/limit-down checks, auction logic, and exchange-rule analysis.
 
 ## Current Project Guide Update
 
@@ -95,3 +104,6 @@ After setup/update finishes, write key information into the user's current proje
 5. Spot check row counts in DuckDB:
    - `select count(*) from daily;`
    - `select count(*) from min5;`
+   - `select count(*) from corporate_action;`
+   - `select min(ex_date), max(ex_date) from corporate_action;`
+   - `select count(*) from daily where hfq_factor is null or hfq_open is null or hfq_high is null or hfq_low is null or hfq_close is null;`

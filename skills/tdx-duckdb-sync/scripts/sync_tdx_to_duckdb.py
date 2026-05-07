@@ -77,7 +77,12 @@ BAR_TABLE_DDL = {
             low REAL,
             close REAL,
             amount DOUBLE,
-            volume BIGINT
+            volume BIGINT,
+            hfq_factor DOUBLE,
+            hfq_open REAL,
+            hfq_high REAL,
+            hfq_low REAL,
+            hfq_close REAL
         )
     """,
     "min5": """
@@ -280,6 +285,12 @@ def connect_database(path: Path) -> duckdb.DuckDBPyConnection:
 
 def ensure_bar_table(con: duckdb.DuckDBPyConnection, spec: "DatasetSpec") -> None:
     con.execute(BAR_TABLE_DDL[spec.output_name])
+    if spec.output_name == "daily":
+        con.execute("ALTER TABLE daily ADD COLUMN IF NOT EXISTS hfq_factor DOUBLE")
+        con.execute("ALTER TABLE daily ADD COLUMN IF NOT EXISTS hfq_open REAL")
+        con.execute("ALTER TABLE daily ADD COLUMN IF NOT EXISTS hfq_high REAL")
+        con.execute("ALTER TABLE daily ADD COLUMN IF NOT EXISTS hfq_low REAL")
+        con.execute("ALTER TABLE daily ADD COLUMN IF NOT EXISTS hfq_close REAL")
 
 
 def ensure_indexes(con: duckdb.DuckDBPyConnection) -> None:
@@ -321,12 +332,254 @@ def flush_buffer(
     arrow_table = pa.Table.from_pydict(buffer.data, schema=schema)
     relation_name = f"_buffer_{uuid4().hex[:10]}"
     con.register(relation_name, arrow_table)
+    column_list = ", ".join(buffer.columns)
     try:
-        con.execute(f"INSERT INTO {table_name} SELECT * FROM {relation_name}")
+        con.execute(
+            f"INSERT INTO {table_name} ({column_list}) "
+            f"SELECT {column_list} FROM {relation_name}"
+        )
     finally:
         con.unregister(relation_name)
     buffer.clear()
     return rows
+
+
+def table_exists(con: duckdb.DuckDBPyConnection, table_name: str) -> bool:
+    return bool(
+        con.execute(
+            """
+            select 1
+            from information_schema.tables
+            where table_schema = 'main' and table_name = ?
+            """,
+            [table_name],
+        ).fetchone()
+    )
+
+
+def refresh_daily_hfq(con: duckdb.DuckDBPyConnection) -> dict:
+    if not table_exists(con, "daily"):
+        return {
+            "dataset": "daily_hfq",
+            "source_files": 0,
+            "written_files": 0,
+            "skipped_files": 0,
+            "rows_written": 0,
+            "errors": ["daily table is missing"],
+        }
+
+    con.execute("ALTER TABLE daily ADD COLUMN IF NOT EXISTS hfq_factor DOUBLE")
+    con.execute("ALTER TABLE daily ADD COLUMN IF NOT EXISTS hfq_open REAL")
+    con.execute("ALTER TABLE daily ADD COLUMN IF NOT EXISTS hfq_high REAL")
+    con.execute("ALTER TABLE daily ADD COLUMN IF NOT EXISTS hfq_low REAL")
+    con.execute("ALTER TABLE daily ADD COLUMN IF NOT EXISTS hfq_close REAL")
+
+    if not table_exists(con, "corporate_action"):
+        con.execute(
+            """
+            update daily
+            set
+                hfq_factor = 1.0,
+                hfq_open = open,
+                hfq_high = high,
+                hfq_low = low,
+                hfq_close = close
+            """
+        )
+        row_count = int(con.execute("select count(*) from daily").fetchone()[0])
+        return {
+            "dataset": "daily_hfq",
+            "source_files": 0,
+            "written_files": 1,
+            "skipped_files": 0,
+            "rows_written": row_count,
+            "errors": ["corporate_action table is missing; hfq columns default to raw close"],
+        }
+
+    if table_exists(con, "security_profile"):
+        con.execute(
+            """
+            create or replace temp table _hfq_stock_universe as
+            select distinct secid
+            from security_profile
+            where secid is not null and secid <> ''
+            """
+        )
+    else:
+        con.execute(
+            """
+            create or replace temp table _hfq_stock_universe as
+            select distinct secid
+            from daily
+            where secid is not null and secid <> ''
+            """
+        )
+
+    con.execute(
+        """
+        create or replace temp table _hfq_cat1 as
+        with aggregated as (
+            select
+                secid,
+                ex_date,
+                sum(coalesce(field_01, 0.0)) / 10.0 as cash_dividend_per_share,
+                max(coalesce(field_02, 0.0)) as rights_price,
+                sum(coalesce(field_03, 0.0)) / 10.0 as bonus_ratio,
+                sum(coalesce(field_04, 0.0)) / 10.0 as rights_ratio
+            from corporate_action
+            where category = 1
+              and secid in (select secid from _hfq_stock_universe)
+            group by 1, 2
+        ),
+        effective_date as (
+            select
+                a.*,
+                (
+                    select min(d.trade_date)
+                    from daily d
+                    where d.secid = a.secid and d.trade_date >= a.ex_date
+                ) as effective_trade_date
+            from aggregated a
+            where abs(cash_dividend_per_share) > 1e-12
+               or abs(rights_price) > 1e-12
+               or abs(bonus_ratio) > 1e-12
+               or abs(rights_ratio) > 1e-12
+        ),
+        previous_close as (
+            select
+                e.*,
+                (
+                    select d.close
+                    from daily d
+                    where d.secid = e.secid and d.trade_date < e.effective_trade_date
+                    order by d.trade_date desc
+                    limit 1
+                ) as prev_close
+            from effective_date e
+            where e.effective_trade_date is not null
+        )
+        select
+            secid,
+            effective_trade_date as trade_date,
+            prev_close / (
+                (prev_close - cash_dividend_per_share + rights_price * rights_ratio)
+                / (1.0 + bonus_ratio + rights_ratio)
+            ) as bridge_factor
+        from previous_close
+        where prev_close is not null
+          and prev_close > 0
+          and (1.0 + bonus_ratio + rights_ratio) > 0
+          and (
+                (prev_close - cash_dividend_per_share + rights_price * rights_ratio)
+                / (1.0 + bonus_ratio + rights_ratio)
+              ) > 0
+        """
+    )
+    con.execute(
+        """
+        create or replace temp table _hfq_cat11 as
+        with effective_date as (
+            select
+                ca.secid,
+                (
+                    select min(d.trade_date)
+                    from daily d
+                    where d.secid = ca.secid and d.trade_date >= ca.ex_date
+                ) as trade_date,
+                ca.field_03 as bridge_factor
+            from corporate_action ca
+            where ca.category = 11
+              and ca.secid in (select secid from _hfq_stock_universe)
+              and ca.field_03 is not null
+              and ca.field_03 > 0
+        )
+        select secid, trade_date, bridge_factor
+        from effective_date
+        where trade_date is not null
+        """
+    )
+    con.execute(
+        """
+        create or replace temp table _hfq_event_factor as
+        select
+            secid,
+            trade_date,
+            exp(sum(ln(bridge_factor))) as bridge_factor
+        from (
+            select * from _hfq_cat1
+            union all
+            select * from _hfq_cat11
+        )
+        where bridge_factor is not null and bridge_factor > 0
+        group by 1, 2
+        """
+    )
+    con.execute(
+        """
+        create or replace temp table _daily_hfq_factor as
+        with joined as (
+            select
+                d.secid,
+                d.trade_date,
+                coalesce(e.bridge_factor, 1.0) as day_factor
+            from daily d
+            left join _hfq_event_factor e
+              on d.secid = e.secid and d.trade_date = e.trade_date
+        )
+        select
+            secid,
+            trade_date,
+            exp(sum(ln(day_factor)) over (
+                partition by secid
+                order by trade_date
+                rows between unbounded preceding and current row
+            )) as hfq_factor
+        from joined
+        """
+    )
+    con.execute(
+        """
+        update daily as d
+        set
+            hfq_factor = f.hfq_factor,
+            hfq_open = cast(d.open * f.hfq_factor as real),
+            hfq_high = cast(d.high * f.hfq_factor as real),
+            hfq_low = cast(d.low * f.hfq_factor as real),
+            hfq_close = cast(d.close * f.hfq_factor as real)
+        from _daily_hfq_factor as f
+        where d.secid = f.secid and d.trade_date = f.trade_date
+        """
+    )
+    con.execute(
+        """
+        update daily
+        set
+            hfq_factor = 1.0,
+            hfq_open = open,
+            hfq_high = high,
+            hfq_low = low,
+            hfq_close = close
+        where hfq_factor is null
+        """
+    )
+
+    row_count = int(con.execute("select count(*) from daily").fetchone()[0])
+    event_rows = int(con.execute("select count(*) from _hfq_event_factor").fetchone()[0])
+    cat1_rows = int(con.execute("select count(*) from _hfq_cat1").fetchone()[0])
+    cat11_rows = int(con.execute("select count(*) from _hfq_cat11").fetchone()[0])
+    return {
+        "dataset": "daily_hfq",
+        "source_files": event_rows,
+        "written_files": 1,
+        "skipped_files": 0,
+        "rows_written": row_count,
+        "table_rows": {
+            "hfq_event_days": event_rows,
+            "hfq_cat1_events": cat1_rows,
+            "hfq_cat11_events": cat11_rows,
+        },
+        "errors": [],
+    }
 
 
 def parse_day_records(data: bytes, start_index: int):
@@ -1310,7 +1563,13 @@ def process_reference_dataset(
         key = "T0002/hq_cache/gbbq"
         if key in sources:
             parsed_keys.add(key)
-            tables["corporate_action"].extend(parse_gbbq(sources[key]))
+            corporate_rows = parse_gbbq(sources[key])
+            if not corporate_rows:
+                parse_errors.append(
+                    "T0002/hq_cache/gbbq parsed 0 rows; verify pytdx installation and gbbq compatibility."
+                )
+            else:
+                tables["corporate_action"].extend(corporate_rows)
     except Exception as exc:  # noqa: BLE001
         parse_errors.append(f"reference parse failed: {exc}")
 
@@ -1486,6 +1745,20 @@ def main() -> int:
                 f"written_files={summary.get('written_files', 0)} "
                 f"rows_written={summary.get('rows_written', 0)} "
                 f"errors={len(summary.get('errors', []))}",
+                flush=True,
+            )
+
+        if "daily" in datasets or "reference" in datasets:
+            hfq_summary = refresh_daily_hfq(con)
+            overall_summaries.append(hfq_summary)
+            total_rows += int(hfq_summary.get("rows_written", 0))
+            total_files += int(hfq_summary.get("written_files", 0))
+            total_errors += len(hfq_summary.get("errors", []))
+            print(
+                f"[daily_hfq] source_files={hfq_summary.get('source_files', 0)} "
+                f"written_files={hfq_summary.get('written_files', 0)} "
+                f"rows_written={hfq_summary.get('rows_written', 0)} "
+                f"errors={len(hfq_summary.get('errors', []))}",
                 flush=True,
             )
 

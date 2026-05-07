@@ -35,6 +35,11 @@
 - `open`, `high`, `low`, `close` float32
 - `amount` float64
 - `volume` int64
+- `hfq_factor` float64: 后复权累计因子
+- `hfq_open` float32: 后复权开盘价（`open * hfq_factor`）
+- `hfq_high` float32: 后复权最高价（`high * hfq_factor`）
+- `hfq_low` float32: 后复权最低价（`low * hfq_factor`）
+- `hfq_close` float32: 后复权收盘价（`close * hfq_factor`）
 
 ## Min5 columns
 
@@ -52,6 +57,12 @@
 Reference tables mirror the parsed `hq_cache` outputs and use one DuckDB table per logical dataset instead of one Parquet file per table.
 
 For exact column meanings, read `references/table-dictionary.md`.
+
+Important caveats:
+
+- `corporate_action` depends on successful `gbbq` parsing via `pytdx`.
+- Historical daily ST status is not part of this schema. Snapshot sources such as `security_master.name` and `block_member` should not be treated as point-in-time ST history.
+- `hfq_factor` and `hfq_ohlc` currently use confirmed `gbbq` categories `1` and `11`. Keep raw OHLC for exchange-rule studies and use `hfq_ohlc` for total-return style research and backtests.
 
 ## Query examples
 

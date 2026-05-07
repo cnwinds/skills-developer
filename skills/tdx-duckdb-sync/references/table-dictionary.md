@@ -9,6 +9,13 @@
 - `open`, `high`, `low`, `close`: 开高低收
 - `amount`: 成交额（通达信原值）
 - `volume`: 成交量（通达信原值）
+- `hfq_factor`: 后复权累计因子（基于已确认 `gbbq` 事件正向递推）
+- `hfq_open`: 后复权开盘价（`open * hfq_factor`）
+- `hfq_high`: 后复权最高价（`high * hfq_factor`）
+- `hfq_low`: 后复权最低价（`low * hfq_factor`）
+- `hfq_close`: 后复权收盘价（`close * hfq_factor`）
+
+注意：`hfq_open/high/low/close` 更适合收益率、形态与趋势研究；涨跌停、撮合规则、盘口限制等研究仍应优先使用原始 OHLC。
 
 ## `min5`
 
@@ -27,6 +34,8 @@
 - `tnf_flag_u32_272`, `tnf_flag_u32_276`, `tnf_type_u16`, `tnf_market_u16`: `tnf` 原始标志位（厂商私有字段，保留原值）
 - `source_file`: 来源 `tnf` 文件
 - `row_index`: 文件内行号
+
+注意：`name` 反映的是采集时点的当前简称，不能直接作为历史逐日 ST 状态来源。
 
 ## `reference/security_profile`
 
@@ -101,6 +110,8 @@
 - `market`, `symbol`, `secid`: 解析后的证券主键（无法识别则为空）
 - `raw_member`: 原始成分串
 - `source_file`, `line_no`: 溯源字段
+
+注意：板块成员表默认是采集时点快照，不是逐日成分历史；`ST板块` 等成员不能直接回填到历史每个交易日。
 
 ## `reference/index_snapshot`
 
